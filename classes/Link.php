@@ -457,6 +457,19 @@ class LinkCore
             $category = $this->getCategoryObject($category, $idLang);
             $params['meta_title'] = Tools::str2url($category->getFieldByLang('meta_title'));
         }
+        if ($dispatcher->hasKeyword($rule, $idLang, 'categories', $idShop)) {
+            $category = $this->getCategoryObject($category, $idLang);
+            $cats = [];
+            foreach (array_reverse($category->getParentsCategories($idLang)) as $cat) {
+                if ($cat['id_category'] == $category->id) {
+                    continue;
+                }
+                if (!in_array($cat['id_category'], Link::$category_disable_rewrite)) {
+                    $cats[] = $cat['link_rewrite'];
+                }
+            }
+            $params['categories'] = implode('/', $cats);
+        }
 
         return $url . Dispatcher::getInstance()->createUrl($rule, $idLang, $params, $this->allow, '', $idShop);
     }
@@ -648,8 +661,6 @@ class LinkCore
 
     /**
      * Create a link to a module.
-     *
-     * @since    1.5.0
      *
      * @param string $module Module name
      * @param string $controller
@@ -933,6 +944,22 @@ class LinkCore
         $type = ($type ? '-' . $type : '');
         $idImage = (string) $idImage;
 
+        $overrideUrl = Hook::exec(
+            'overrideImageLink',
+            [
+                'name' => $name,
+                'ids' => $idImage,
+                'type' => $type,
+                'extension' => $extension,
+            ],
+            null,
+            true
+        );
+
+        if (!empty($overrideUrl)) {
+            return $overrideUrl;
+        }
+
         // Default image like "fr-default"
         if (strpos($idImage, 'default') !== false) {
             $theme = ((Shop::isFeatureActive() && file_exists(_PS_PRODUCT_IMG_DIR_ . $idImage . $type . '-' . Context::getContext()->shop->theme_name . '.jpg')) ? '-' . Context::getContext()->shop->theme_name : '');
@@ -963,7 +990,22 @@ class LinkCore
             }
         }
 
-        return $this->getMediaLink($uriPath);
+        $url = $this->getMediaLink($uriPath);
+
+        Hook::exec(
+            'adaptImageLink',
+            [
+                'protocol_content' => $this->protocol_content,
+                'uri_path' => $uriPath,
+                'url' => &$url,
+                'name' => $name,
+                'ids' => $idImage,
+                'type' => $type,
+                'extension' => $extension,
+            ]
+        );
+
+        return $url;
     }
 
     /**

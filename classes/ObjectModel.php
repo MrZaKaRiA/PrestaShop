@@ -120,8 +120,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
 
     /**
      * @var array Contains object definition
-     *
-     * @since 1.5.0.1
      */
     public static $definition = [];
 
@@ -263,8 +261,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
      * Fields are not validated here, we consider they are already validated in getFields() method,
      * this is not the best solution but this is the only one possible for retro compatibility.
      *
-     * @since 1.5.0.1
-     *
      * @return array All object fields
      */
     public function getFieldsShop()
@@ -279,8 +275,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
 
     /**
      * Prepare multilang fields.
-     *
-     * @since 1.5.0.1
      *
      * @return array
      *
@@ -334,8 +328,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
 
     /**
      * Formats values of each fields.
-     *
-     * @since 1.5.0.1
      *
      * @param int $type FORMAT_COMMON or FORMAT_LANG or FORMAT_SHOP
      * @param int $id_lang If this parameter is given, only take lang fields
@@ -679,6 +671,9 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
         /** @var ObjectModel $object_duplicated */
         $object_duplicated = new $definition['classname']((int) $object_id);
         $object_duplicated->duplicateShops((int) $this->id);
+
+        Hook::exec('actionObjectDuplicateAfter', ['oldObject' => $this, 'newObject' => $object_duplicated]);
+        Hook::exec('actionObject' . $this->getFullyQualifiedName() . 'DuplicateAfter', ['oldObject' => $this, 'newObject' => $object_duplicated]);
 
         return $object_duplicated;
     }
@@ -1033,8 +1028,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
 
     /**
      * Validate a single field.
-     *
-     * @since 1.5.0.1
      *
      * @param string $field Field name
      * @param mixed $value Field value
@@ -1588,8 +1581,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
     /**
      * Checks if current object is associated to a shop.
      *
-     * @since 1.5.0.1
-     *
      * @param int|null $id_shop
      *
      * @return bool
@@ -1661,8 +1652,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
     /**
      * Gets the list of associated shop IDs.
      *
-     * @since 1.5.0.1
-     *
      * @return array<int, int>
      *
      * @throws PrestaShopDatabaseException
@@ -1684,8 +1673,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
 
     /**
      * Copies shop association data from object with specified ID.
-     *
-     * @since 1.5.0.1
      *
      * @param int $id
      *
@@ -1716,8 +1703,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
 
     /**
      * Checks if there is more than one entry in associated shop table for current object.
-     *
-     * @since 1.5.0.1
      *
      * @return bool
      */
@@ -1764,8 +1749,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
 
     /**
      * Updates a table and splits the common datas and the shop datas.
-     *
-     * @since 1.5.0.1
      *
      * @param string $classname
      * @param array $data
@@ -1912,8 +1895,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
     /**
      * Checks if an object type exists in the database.
      *
-     * @since 1.5.0.1
-     *
      * @param string|null $table Name of table linked to entity
      * @param bool $has_active_column True if the table has an active column
      *
@@ -1939,8 +1920,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
      * Fill an object with given data. Data must be an array with this syntax:
      * array(objProperty => value, objProperty2 => value, etc.).
      *
-     * @since 1.5.0.1
-     *
      * @param array $data
      * @param int|null $id_lang
      */
@@ -1960,8 +1939,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
 
     /**
      * Fill (hydrate) a list of objects in order to get a collection of these objects.
-     *
-     * @since 1.5.0.1
      *
      * @param string $class Class of objects to hydrate
      * @param array $datas List of data (multi-dimensional array)
@@ -2067,8 +2044,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
      * Return the field value for the specified language if the field is multilang,
      * else the field value.
      *
-     * @since 1.5.0.1
-     *
      * @param string $field_name
      * @param int|null $id_lang
      *
@@ -2099,8 +2074,6 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
      * Set a list of specific fields to update
      * array(field1 => true, field2 => false,
      * langfield1 => array(1 => true, 2 => false)).
-     *
-     * @since 1.5.0.1
      *
      * @param array<string, bool|array<int, bool>>|null $fields
      */

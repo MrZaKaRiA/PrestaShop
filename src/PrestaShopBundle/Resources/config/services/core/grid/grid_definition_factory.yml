@@ -56,6 +56,7 @@ services:
     arguments:
       - '@prestashop.adapter.shop.context'
       - '@prestashop.adapter.grid.action.row.accessibility_checker.category_for_view'
+      - '@request_stack'
     public: true
 
   prestashop.core.grid.definition.factory.employee:
@@ -482,6 +483,11 @@ services:
     public: true
 
   PrestaShop\PrestaShop\Core\Grid\Definition\Factory\ImageTypeGridDefinitionFactory:
+    parent: PrestaShop\PrestaShop\Core\Grid\Definition\Factory\AbstractGridDefinitionFactory
+    autowire: true
+    public: true
+
+  PrestaShop\PrestaShop\Core\Grid\Definition\Factory\ShipmentGridDefinitionFactory:
     parent: PrestaShop\PrestaShop\Core\Grid\Definition\Factory\AbstractGridDefinitionFactory
     autowire: true
     public: true

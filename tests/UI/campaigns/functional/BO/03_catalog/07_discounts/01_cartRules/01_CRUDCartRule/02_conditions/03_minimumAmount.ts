@@ -19,6 +19,7 @@ import {
   type Page,
   utilsCore,
   utilsPlaywright,
+  dataCurrencies,
 } from '@prestashop-core/ui-testing';
 
 const baseContext: string = 'functional_BO_catalog_discounts_cartRules_CRUDCartRule_conditions_minimumAmount';
@@ -43,7 +44,7 @@ describe('BO - Catalog - Cart rules : Minimum amount', async () => {
     code: 'test',
     minimumAmount: {
       value: 50,
-      currency: 'EUR',
+      currency: dataCurrencies.euro,
       tax: 'Tax included',
       shipping: 'Shipping excluded',
     },
@@ -156,9 +157,9 @@ describe('BO - Catalog - Cart rules : Minimum amount', async () => {
 
       await foClassicCartPage.addPromoCode(page, newCartRuleData.code);
 
-      const discount = await utilsCore.percentage(
+      const discount = utilsCore.percentage(
         dataProducts.demo_6.combinations[0].price * 2,
-        newCartRuleData.discountPercent!,
+        newCartRuleData.getDiscountPercent(),
       );
 
       const totalAfterDiscount = await foClassicCartPage.getATIPrice(page);

@@ -11,6 +11,7 @@ Feature: Full UX discount test
     Given there is a customer named "testCustomer" whose email is "pub@prestashop.com"
     Given there is a customer named "testCustomer2" whose email is "pub2@prestashop.com"
     Given language with iso code "en" is the default one
+    And language "french" with locale "fr-FR" exists
     Given shop "shop1" with name "test_shop" exists
     And there is a currency named "usd" with iso code "USD" and exchange rate of 0.92
     And shop configuration for "PS_CART_RULE_FEATURE_ACTIVE" is set to 1
@@ -19,8 +20,9 @@ Feature: Full UX discount test
     Given I create an empty cart "dummy_cart" for customer "testCustomer"
     And there is a product in the catalog named "product1" with a price of 19.812 and 1000 items in stock
     And there is a product in the catalog named "product2" with a price of 20.0 and 1000 items in stock
-    When I create a cart level discount "complete_amount_cart_level_discount" with following properties:
+    When I create a "cart_level" discount "complete_amount_cart_level_discount" with following properties:
       | name[en-US]        | Promotion           |
+      | name[fr-FR]       | Promotion_fr        |
       | active             | true                |
       | valid_from         | 2025-01-01 11:05:00 |
       | valid_to           | 2025-12-01 00:00:00 |
@@ -30,6 +32,7 @@ Feature: Full UX discount test
       | taxIncluded        | true                |
     And discount "complete_amount_cart_level_discount" should have the following properties:
       | name[en-US]        | Promotion           |
+      | name[fr-FR]       | Promotion_fr        |
       | active             | true                |
       | valid_from         | 2025-01-01 11:05:00 |
       | valid_to           | 2025-12-01 00:00:00 |
@@ -51,8 +54,9 @@ Feature: Full UX discount test
   Scenario: Create a complete cart level percent discount using new CQRS
     Given I create an empty cart "dummy_cart_2" for customer "testCustomer2"
     And there is a product in the catalog named "product3" with a price of 19.9 and 1000 items in stock
-    When I create a cart level discount "complete_percent_cart_level_discount" with following properties:
+    When I create a "cart_level" discount "complete_percent_cart_level_discount" with following properties:
       | name[en-US]       | Promotion           |
+      | name[fr-FR]       | Promotion_fr        |
       | active            | true                |
       | valid_from        | 2025-01-01 11:05:00 |
       | valid_to          | 2025-12-01 00:00:00 |
@@ -60,6 +64,7 @@ Feature: Full UX discount test
       | reduction_percent | 50.0                |
     And discount "complete_percent_cart_level_discount" should have the following properties:
       | name[en-US]       | Promotion           |
+      | name[fr-FR]       | Promotion_fr        |
       | active            | true                |
       | valid_from        | 2025-01-01 11:05:00 |
       | valid_to          | 2025-12-01 00:00:00 |

@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Copyright since 2007 PrestaShop SA and Contributors
  * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
@@ -163,8 +164,6 @@ abstract class ModuleCore implements ModuleInterface
     /** @var string Module web path (eg. '/shop/modules/modulename/') */
     protected $_path = null;
     /**
-     * @since 1.5.0.1
-     *
      * @var string Module local path (eg. '/home/prestashop/modules/modulename/')
      */
     protected $local_path = null;
@@ -199,7 +198,7 @@ abstract class ModuleCore implements ModuleInterface
     /** @var array Array filled with cache permissions (modules / employee profiles) */
     protected static $cache_lgc_access = [];
 
-    /** @var Context */
+    /** @var Context|null */
     protected $context;
 
     /** @var Smarty_Data|Smarty_Internal_TemplateBase */
@@ -719,10 +718,16 @@ abstract class ModuleCore implements ModuleInterface
      */
     public static function upgradeModuleVersion($name, $version)
     {
-        return Db::getInstance()->execute('
+        $result = Db::getInstance()->execute('
             UPDATE `' . _DB_PREFIX_ . 'module` m
             SET m.`version` = \'' . pSQL($version) . '\'
             WHERE m.`name` = \'' . pSQL($name) . '\'');
+
+        if (isset(static::$modules_cache[$name]['upgrade']) && true == static::$modules_cache[$name]['upgrade']['success']) {
+            Hook::exec('actionModuleUpgradeAfter', ['module_name' => $name, 'old_version' => static::$modules_cache[$name]['upgrade']['upgraded_from'], 'new_version' => $version]);
+        }
+
+        return $result;
     }
 
     /**
@@ -962,7 +967,6 @@ abstract class ModuleCore implements ModuleInterface
      *
      * @return bool
      *
-     * @since 1.4.1
      * @deprecated since 1.7
      * @see  PrestaShop\PrestaShop\Core\Module\ModuleManager->enable($name)
      */
@@ -992,6 +996,8 @@ abstract class ModuleCore implements ModuleInterface
      */
     public function enable($force_all = false)
     {
+        Hook::exec('actionModuleEnable', ['module' => $this]);
+
         // Retrieve all shops where the module is enabled
         $list = Shop::getContextListShopID();
         if (!$this->id || !is_array($list)) {
@@ -1095,8 +1101,6 @@ abstract class ModuleCore implements ModuleInterface
      * @param array|string $name
      *
      * @return bool
-     *
-     * @since 1.7
      */
     public static function disableAllByName($name)
     {
@@ -1122,7 +1126,6 @@ abstract class ModuleCore implements ModuleInterface
      *
      * @return bool
      *
-     * @since 1.4.1
      * @deprecated since 1.7
      * @see  PrestaShop\PrestaShop\Core\Module\ModuleManager->disable($name)
      */
@@ -1152,6 +1155,8 @@ abstract class ModuleCore implements ModuleInterface
      */
     public function disable($force_all = false)
     {
+        Hook::exec('actionModuleDisable', ['module' => $this]);
+
         $result = true;
         if ($this->getOverrides() != null) {
             $result &= $this->uninstallOverrides();
@@ -2435,8 +2440,6 @@ abstract class ModuleCore implements ModuleInterface
     /**
      * Get realpath of a template of current module (check if template is overridden too).
      *
-     * @since 1.5.0
-     *
      * @param string $template
      *
      * @return string|null
@@ -2767,8 +2770,6 @@ abstract class ModuleCore implements ModuleInterface
     /**
      * Get module errors.
      *
-     * @since 1.5.0
-     *
      * @return array errors
      */
     public function getErrors()
@@ -2778,8 +2779,6 @@ abstract class ModuleCore implements ModuleInterface
 
     /**
      * Get module messages confirmation.
-     *
-     * @since 1.5.0
      *
      * @return array conf
      */
@@ -2791,8 +2790,6 @@ abstract class ModuleCore implements ModuleInterface
     /**
      * Get local path for module.
      *
-     * @since 1.5.0
-     *
      * @return string
      */
     public function getLocalPath()
@@ -2802,8 +2799,6 @@ abstract class ModuleCore implements ModuleInterface
 
     /**
      * Get uri path for module.
-     *
-     * @since 1.5.0
      *
      * @return string
      */
@@ -3036,7 +3031,7 @@ abstract class ModuleCore implements ModuleInterface
                     throw new Exception(Context::getContext()->getTranslator()->trans('The property %1$s in the class %2$s is already defined.', [$property->getName(), $classname], 'Admin.Modules.Notification'));
                 }
 
-                $module_file = preg_replace('/((?:public|private|protected)\s)\s*(static\s)?\s*(\$\b' . $property->getName() . '\b)/ism', "/*\n    * module: " . $this->name . "\n    * date: " . date('Y-m-d H:i:s') . "\n    * version: " . $this->version . "\n    */\n    $1$2$3", $module_file);
+                $module_file = preg_replace('/((?:public|private|protected)\s)\s*(static\s)?\s*(\w+\s)?\s*(\$\b' . $property->getName() . '\b)/ism', "/*\n    * module: " . $this->name . "\n    * date: " . date('Y-m-d H:i:s') . "\n    * version: " . $this->version . "\n    */\n    $1$2$3$4", $module_file);
                 if ($module_file === null) {
                     throw new Exception(Context::getContext()->getTranslator()->trans('Failed to override property %1$s in class %2$s.', [$property->getName(), $classname], 'Admin.Modules.Notification'));
                 }
@@ -3104,7 +3099,7 @@ abstract class ModuleCore implements ModuleInterface
 
                 // Same loop for properties
                 foreach ($module_class->getProperties() as $property) {
-                    $module_file = preg_replace('/((?:public|private|protected)\s)\s*(static\s)?\s*(\$\b' . $property->getName() . '\b)/ism', "/*\n    * module: " . $this->name . "\n    * date: " . date('Y-m-d H:i:s') . "\n    * version: " . $this->version . "\n    */\n    $1$2$3", $module_file);
+                    $module_file = preg_replace('/((?:public|private|protected)\s)\s*(static\s)?\s*(\w+\s)?\s*(\$\b' . $property->getName() . '\b)/ism', "/*\n    * module: " . $this->name . "\n    * date: " . date('Y-m-d H:i:s') . "\n    * version: " . $this->version . "\n    */\n    $1$2$3$4", $module_file);
                     if ($module_file === null) {
                         throw new Exception(Context::getContext()->getTranslator()->trans('Failed to override property %1$s in class %2$s.', [$property->getName(), $classname], 'Admin.Modules.Notification'));
                     }
@@ -3271,7 +3266,7 @@ abstract class ModuleCore implements ModuleInterface
 
                 // Replace the declaration line by #--remove--#
                 foreach ($override_file as $line_number => &$line_content) {
-                    if (preg_match('/(public|private|protected)\s+(static\s+)?(\$)?' . $property->getName() . '/i', $line_content)) {
+                    if (preg_match('/(public|private|protected)\s+(static\s+)?\s*(\w+\s+)?(\$)?' . $property->getName() . '/i', $line_content)) {
                         if (preg_match('/\* module: (' . $this->name . ')/ism', $override_file[$line_number - 4])) {
                             $override_file[$line_number - 5] = $override_file[$line_number - 4] = $override_file[$line_number - 3] = $override_file[$line_number - 2] = $override_file[$line_number - 1] = '#--remove--#';
                         }

@@ -28,8 +28,12 @@ declare(strict_types=1);
 namespace PrestaShop\PrestaShop\Adapter\Discount\Validate;
 
 use CartRule;
+use PrestaShop\Decimal\DecimalNumber;
 use PrestaShop\PrestaShop\Adapter\AbstractObjectModelValidator;
+use PrestaShop\PrestaShop\Adapter\Discount\Repository\DiscountRepository;
+use PrestaShop\PrestaShop\Core\Domain\Discount\Command\AddDiscountCommand;
 use PrestaShop\PrestaShop\Core\Domain\Discount\Exception\DiscountConstraintException;
+use PrestaShop\PrestaShop\Core\Domain\Discount\ValueObject\DiscountType;
 use PrestaShop\PrestaShop\Core\Exception\CoreException;
 use PrestaShopException;
 
@@ -38,6 +42,13 @@ use PrestaShopException;
  */
 class DiscountValidator extends AbstractObjectModelValidator
 {
+    protected ?DiscountRepository $discountRepository = null;
+
+    public function setDiscountRepository(DiscountRepository $discountRepository): void
+    {
+        $this->discountRepository = $discountRepository;
+    }
+
     public function validate(CartRule $cartRule): void
     {
         $this->validateCartRuleProperty($cartRule, 'id_customer', DiscountConstraintException::INVALID_CUSTOMER_ID);
@@ -79,6 +90,46 @@ class DiscountValidator extends AbstractObjectModelValidator
         );
 
         $this->assertCodeIsUnique($cartRule);
+        $this->assertDateRangeIsCorrect($cartRule);
+    }
+
+    /**
+     * @throws DiscountConstraintException
+     */
+    public function validateDiscountPropertiesForType(AddDiscountCommand $command)
+    {
+        switch ($command->getDiscountType()->getValue()) {
+            case DiscountType::FREE_SHIPPING:
+                break;
+            case DiscountType::CART_LEVEL:
+            case DiscountType::ORDER_LEVEL:
+                if ($command->getAmountDiscount() !== null && $command->getPercentDiscount() !== null) {
+                    throw new DiscountConstraintException('Discount can not be amount and percent at the same time', DiscountConstraintException::INVALID_DISCOUNT_CANNOT_BE_AMOUNT_AND_PERCENT);
+                }
+                if ($command->getAmountDiscount() !== null) {
+                    if ($command->getAmountDiscount()->getAmount()->isLowerThanZero()) {
+                        throw new DiscountConstraintException('Discount value can not be negative', DiscountConstraintException::INVALID_DISCOUNT_VALUE_CANNOT_BE_NEGATIVE);
+                    }
+                }
+                if ($command->getPercentDiscount() !== null) {
+                    if ($command->getPercentDiscount()->isLowerThanZero() || $command->getPercentDiscount()->isGreaterThan(new DecimalNumber('100'))) {
+                        throw new DiscountConstraintException('Discount value can not be negative or above 100', DiscountConstraintException::INVALID_DISCOUNT_VALUE_CANNOT_BE_NEGATIVE);
+                    }
+                }
+                break;
+            case DiscountType::PRODUCT_LEVEL:
+                if ($command->getReductionProduct() === 0 || $command->getPercentDiscount() === null) {
+                    throw new DiscountConstraintException('Product discount must have his properties set.', DiscountConstraintException::INVALID_PRODUCT_DISCOUNT_PROPERTIES);
+                }
+                break;
+            case DiscountType::FREE_GIFT:
+                if ($command->getProductId() === null) {
+                    throw new DiscountConstraintException('Free gift discount must have his properties set.', DiscountConstraintException::INVALID_FREE_GIFT_DISCOUNT_PROPERTIES);
+                }
+                break;
+            default:
+                throw new DiscountConstraintException(sprintf("Invalid discount type '%s'.", $command->getDiscountType()->getValue()), DiscountConstraintException::INVALID_DISCOUNT_TYPE);
+        }
     }
 
     private function validateCartRuleProperty(CartRule $cartRule, string $propertyName, int $code): void
@@ -93,6 +144,12 @@ class DiscountValidator extends AbstractObjectModelValidator
 
     private function assertCodeIsUnique(CartRule $cartRule): void
     {
+        // To avoid circular dependency, we need to set the repository with setDiscountRepository.
+        // So, we need to check if discountRepository property is set before use this function!
+        if ($this->discountRepository === null) {
+            throw new CoreException('Discount repository is mandatory to check discount code uniquicity.');
+        }
+
         $code = $cartRule->code;
 
         if (empty($code)) {
@@ -100,16 +157,23 @@ class DiscountValidator extends AbstractObjectModelValidator
         }
 
         try {
-            $duplicateCodeCartRuleId = (int) CartRule::getIdByCode($code);
+            $duplicateCodeCartRuleId = $this->discountRepository->getIdByCode($code);
         } catch (PrestaShopException $e) {
-            throw new CoreException('Error occurred when trying to check if cart rule code is unique', 0, $e);
+            throw new CoreException('Error occurred when trying to check if discount code is unique', 0, $e);
         }
 
         if ($duplicateCodeCartRuleId && $duplicateCodeCartRuleId !== (int) $cartRule->id) {
             throw new DiscountConstraintException(
-                sprintf('Cart rule with code "%s" already exists', $code),
+                sprintf('This discount code "%s" is already used (conflict with discount %s)', $code, $duplicateCodeCartRuleId),
                 DiscountConstraintException::NON_UNIQUE_CODE
             );
+        }
+    }
+
+    private function assertDateRangeIsCorrect(CartRule $cartrule): void
+    {
+        if ($cartrule->date_from > $cartrule->date_to) {
+            throw new DiscountConstraintException('Date from cannot be greater than date to.', DiscountConstraintException::DATE_FROM_GREATER_THAN_DATE_TO);
         }
     }
 }

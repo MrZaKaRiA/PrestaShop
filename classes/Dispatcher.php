@@ -25,9 +25,6 @@
  */
 use Symfony\Component\HttpFoundation\Request as SymfonyRequest;
 
-/**
- * @since 1.5.0
- */
 class DispatcherCore
 {
     /**
@@ -67,6 +64,7 @@ class DispatcherCore
                 'id' => ['regexp' => '[0-9]+', 'param' => 'id_category'],
                 'rewrite' => ['regexp' => self::REWRITE_PATTERN],
                 'meta_title' => ['regexp' => '[_a-zA-Z0-9-\pL]*'],
+                'categories' => ['regexp' => '[/_a-zA-Z0-9-\pL]*'],
             ],
         ],
         'supplier_rule' => [

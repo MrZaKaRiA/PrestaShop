@@ -25,6 +25,7 @@
  */
 use PrestaShop\PrestaShop\Adapter\AddressFactory;
 use PrestaShop\PrestaShop\Adapter\Cache\CacheAdapter;
+use PrestaShop\PrestaShop\Adapter\ContainerFinder;
 use PrestaShop\PrestaShop\Adapter\Customer\CustomerDataProvider;
 use PrestaShop\PrestaShop\Adapter\Database;
 use PrestaShop\PrestaShop\Adapter\Group\GroupDataProvider;
@@ -33,6 +34,7 @@ use PrestaShop\PrestaShop\Adapter\ServiceLocator;
 use PrestaShop\PrestaShop\Core\Cart\Calculator;
 use PrestaShop\PrestaShop\Core\Cart\CartRow;
 use PrestaShop\PrestaShop\Core\Cart\CartRuleData;
+use PrestaShop\PrestaShop\Core\FeatureFlag\FeatureFlagStateCheckerInterface;
 use PrestaShop\PrestaShop\Core\Localization\Exception\LocalizationException;
 use PrestaShopBundle\Form\Admin\Type\FormattedTextareaType;
 
@@ -104,6 +106,7 @@ class CartCore extends ObjectModel
     protected static $_isVirtualCart = [];
 
     protected $_products = null;
+    protected $_products_with_separated_gifts = null;
     protected static $_totalWeight = [];
     protected $_taxCalculationMethod = PS_TAX_EXC;
     protected static $_carriers = null;
@@ -180,8 +183,14 @@ class CartCore extends ObjectModel
 
     protected $addressFactory;
 
+    /**
+     * @deprecated since 9.1.0 - it doesn't do anything and will be removed
+     */
     protected $shouldSplitGiftProductsQuantity = false;
 
+    /**
+     * @deprecated since 9.1.0 - it doesn't do anything and will be removed
+     */
     protected $shouldExcludeGiftsDiscount = false;
 
     public const ONLY_PRODUCTS = 1;
@@ -247,6 +256,16 @@ class CartCore extends ObjectModel
         static::$cacheMultiAddressDelivery = [];
     }
 
+    public function resetProductRelatedStaticCache()
+    {
+        if (isset(self::$_nbProducts[$this->id])) {
+            unset(self::$_nbProducts[$this->id]);
+        }
+        if (isset(self::$_totalWeight[$this->id])) {
+            unset(self::$_totalWeight[$this->id]);
+        }
+    }
+
     /**
      * Set Tax calculation method.
      */
@@ -297,13 +316,9 @@ class CartCore extends ObjectModel
     public function update($nullValues = false)
     {
         // Wipe all product-related caches, because something may just change
-        if (isset(self::$_nbProducts[$this->id])) {
-            unset(self::$_nbProducts[$this->id]);
-        }
-        if (isset(self::$_totalWeight[$this->id])) {
-            unset(self::$_totalWeight[$this->id]);
-        }
+        $this->resetProductRelatedStaticCache();
         $this->_products = null;
+        $this->_products_with_separated_gifts = null;
 
         $return = parent::update($nullValues);
         Hook::exec('actionCartSave', ['cart' => $this]);
@@ -617,19 +632,35 @@ class CartCore extends ObjectModel
      * @param int|null $id_country
      * @param bool $fullInfos
      * @param bool $keepOrderPrices When true use the Order saved prices instead of the most recent ones from catalog (if Order exists)
+     * @param bool $shouldSplitGiftProductsQuantity When true, gifts will be displayed separately. Make sure not to call this from a loop
      *
      * @return array Products
      */
-    public function getProducts($refresh = false, $id_product = false, $id_country = null, $fullInfos = true, bool $keepOrderPrices = false)
-    {
+    public function getProducts(
+        $refresh = false,
+        $id_product = false,
+        $id_country = null,
+        $fullInfos = true,
+        bool $keepOrderPrices = false,
+        bool $shouldSplitGiftProductsQuantity = false
+    ) {
+        // If the cart is not saved, then there can't be any products in it
         if (!$this->id) {
             return [];
         }
+
+        // Get cache key we will use, depending on whether we want to split gift products quantity or not
+        if ($shouldSplitGiftProductsQuantity) {
+            $cacheKey = '_products_with_separated_gifts';
+        } else {
+            $cacheKey = '_products';
+        }
+
         // Product cache must be strictly compared to NULL, or else an empty cart will add dozens of queries
-        if ($this->_products !== null && !$refresh) {
-            // Return product row with specified ID if it exists
+        if ($this->{$cacheKey} !== null && !$refresh) {
+            // If a specific product ID is requested, we will search for it in the cache.
             if (is_int($id_product)) {
-                foreach ($this->_products as $product) {
+                foreach ($this->{$cacheKey} as $product) {
                     if ($product['id_product'] == $id_product) {
                         return [$product];
                     }
@@ -638,7 +669,8 @@ class CartCore extends ObjectModel
                 return [];
             }
 
-            return $this->_products;
+            // Otherwise, we return the whole cache
+            return $this->{$cacheKey};
         }
 
         // Build query
@@ -767,7 +799,7 @@ class CartCore extends ObjectModel
         Cart::cacheSomeAttributesLists($pa_ids, (int) $this->getAssociatedLanguage()->getId());
 
         if (empty($products)) {
-            $this->_products = [];
+            $this->{$cacheKey} = [];
 
             return [];
         }
@@ -777,7 +809,7 @@ class CartCore extends ObjectModel
 
             $givenAwayProductsIds = [];
 
-            if ($this->shouldSplitGiftProductsQuantity && $refresh) {
+            if ($shouldSplitGiftProductsQuantity) {
                 $gifts = $this->getCartRules(CartRule::FILTER_ACTION_GIFT, false);
                 if (count($gifts) > 0) {
                     foreach ($gifts as $gift) {
@@ -806,7 +838,7 @@ class CartCore extends ObjectModel
                 }
             }
 
-            $this->_products = [];
+            $this->{$cacheKey} = [];
 
             foreach ($products as &$product) {
                 if (!array_key_exists('is_gift', $product)) {
@@ -834,7 +866,7 @@ class CartCore extends ObjectModel
                     $product = $this->applyProductCalculations($product, $cart_shop_context, null, $keepOrderPrices);
                 } else {
                     // Separate products given away from those manually added to cart
-                    $this->_products[] = $this->applyProductCalculations($product, $cart_shop_context, $givenAwayQuantity, $keepOrderPrices);
+                    $this->{$cacheKey}[] = $this->applyProductCalculations($product, $cart_shop_context, $givenAwayQuantity, $keepOrderPrices);
                     unset($product['is_gift']);
                     $product = $this->applyProductCalculations(
                         $product,
@@ -844,13 +876,13 @@ class CartCore extends ObjectModel
                     );
                 }
 
-                $this->_products[] = $product;
+                $this->{$cacheKey}[] = $product;
             }
         } else {
-            $this->_products = $products;
+            $this->{$cacheKey} = $products;
         }
 
-        return $this->_products;
+        return $this->{$cacheKey};
     }
 
     /**
@@ -1479,13 +1511,8 @@ class CartCore extends ObjectModel
             throw new PrestaShopException(sprintf('Product with ID "%s" could not be loaded.', $id_product));
         }
 
-        if (isset(self::$_nbProducts[$this->id])) {
-            unset(self::$_nbProducts[$this->id]);
-        }
-
-        if (isset(self::$_totalWeight[$this->id])) {
-            unset(self::$_totalWeight[$this->id]);
-        }
+        // Wipe all product-related caches, because something may just change
+        $this->resetProductRelatedStaticCache();
 
         $data = [
             'cart' => $this,
@@ -1753,13 +1780,8 @@ class CartCore extends ObjectModel
         bool $preserveGiftsRemoval = true,
         bool $useOrderPrices = false
     ) {
-        if (isset(self::$_nbProducts[$this->id])) {
-            unset(self::$_nbProducts[$this->id]);
-        }
-
-        if (isset(self::$_totalWeight[$this->id])) {
-            unset(self::$_totalWeight[$this->id]);
-        }
+        // Wipe all product-related caches, because something may just change
+        $this->resetProductRelatedStaticCache();
 
         // First, if we are deleting a product with customization, we delete it from the database
         if ((int) $id_customization) {
@@ -2116,9 +2138,11 @@ class CartCore extends ObjectModel
             $orderId = Order::getIdByCartId($this->id);
             $orderId = (int) $orderId ?: null;
         }
+        $container = (new ContainerFinder(Context::getContext()))->getContainer();
         $calculator = new Calculator(
             $this,
             $id_carrier,
+            $container->get(FeatureFlagStateCheckerInterface::class),
             $computePrecision,
             $orderId
         );
@@ -2171,11 +2195,7 @@ class CartCore extends ObjectModel
      */
     public function getDiscountSubtotalWithoutGifts($withTaxes = true)
     {
-        $discountSubtotal = $this->excludeGiftsDiscountFromTotal()
-            ->getOrderTotal($withTaxes, self::ONLY_DISCOUNTS);
-        $this->includeGiftsDiscountInTotal();
-
-        return $discountSubtotal;
+        return $this->getOrderTotal($withTaxes, self::ONLY_DISCOUNTS);
     }
 
     /**
@@ -2917,6 +2937,7 @@ class CartCore extends ObjectModel
             'actionFilterDeliveryOptionList',
             [
                 'delivery_option_list' => &$delivery_option_list,
+                'cart' => $this,
             ]
         );
 
@@ -3647,7 +3668,14 @@ class CartCore extends ObjectModel
             return false;
         }
 
-        if ($module->id_carrier) {
+        /*
+         * If the module has an id_carrier property, we set it to the current carrier ID.
+         *
+         * We need to check if the property exists because not all carrier modules have this property.
+         * Those that extend CarrierModule have it automatically, but those extending regular Module may not.
+         */
+        /* @phpstan-ignore-next-line */
+        if (property_exists($module, 'id_carrier')) {
             $module->id_carrier = $carrier->id;
         }
 
@@ -4198,10 +4226,8 @@ class CartCore extends ObjectModel
             return false;
         }
 
-        $cart = new Cart($this->id);
-        $cart->id = null;
-        $cart->id_shop = $this->id_shop;
-        $cart->id_shop_group = $this->id_shop_group;
+        /** @var Cart $cart */
+        $cart = $this->duplicateObject();
 
         // If the original addresses no longer exist or are deleted, we will treat it like a new cart in this regard
         if (!Customer::customerHasAddress((int) $cart->id_customer, (int) $cart->id_address_delivery)) {
@@ -4216,7 +4242,13 @@ class CartCore extends ObjectModel
             $cart->secure_key = Cart::$_customer->secure_key;
         }
 
-        $cart->add();
+        $cart->save();
+
+        // clear checkout session data so that the customer can start a new checkout
+        Db::getInstance()->execute(
+            'UPDATE ' . _DB_PREFIX_ . 'cart SET checkout_session_data = NULL
+                WHERE id_cart = ' . (int) $cart->id
+        );
 
         if (!Validate::isLoadedObject($cart)) {
             return false;
@@ -4307,6 +4339,8 @@ class CartCore extends ObjectModel
                 false
             );
         }
+
+        Hook::exec('actionDuplicateCartData', ['oldCardId' => $this->id, 'newCartId' => $cart->id]);
 
         return ['cart' => $cart, 'success' => $success];
     }
@@ -4553,8 +4587,6 @@ class CartCore extends ObjectModel
      *
      * @param bool $ignoreVirtual Ignore virtual products
      *
-     * @since 1.5.0
-     *
      * @return bool False if not all products in the cart are in stock
      */
     public function isAllProductsInStock($ignoreVirtual = false)
@@ -4602,52 +4634,70 @@ class CartCore extends ObjectModel
     }
 
     /**
+     * @deprecated since 9.1.0 - it doesn't do anything and will be removed
+     *
      * Set flag to split lines of products given away and also manually added to cart.
      */
     protected function splitGiftsProductsQuantity()
     {
         $this->shouldSplitGiftProductsQuantity = true;
-        $this->_products = null;
 
         return $this;
     }
 
     /**
+     * @deprecated since 9.1.0 - it doesn't do anything and will be removed
+     *
      * Set flag to merge lines of products given away and also manually added to cart.
      */
     protected function mergeGiftsProductsQuantity()
     {
         $this->shouldSplitGiftProductsQuantity = false;
-        $this->_products = null;
-
-        return $this;
-    }
-
-    protected function excludeGiftsDiscountFromTotal()
-    {
-        $this->shouldExcludeGiftsDiscount = true;
-        $this->_products = null;
-
-        return $this;
-    }
-
-    protected function includeGiftsDiscountInTotal()
-    {
-        $this->shouldExcludeGiftsDiscount = false;
-        $this->_products = null;
 
         return $this;
     }
 
     /**
-     * Get products with gifts and manually added occurrences separated.
+     * @deprecated since 9.1.0 - it doesn't do anything and will be removed
+     */
+    protected function excludeGiftsDiscountFromTotal()
+    {
+        $this->shouldExcludeGiftsDiscount = true;
+
+        return $this;
+    }
+
+    /**
+     * @deprecated since 9.1.0 - it doesn't do anything and will be removed
+     */
+    protected function includeGiftsDiscountInTotal()
+    {
+        $this->shouldExcludeGiftsDiscount = false;
+
+        return $this;
+    }
+
+    /**
+     * Get products with gifts and manually added products separated.
+     * This is now a normal display in front office.
      *
      * @return array|null
      */
     public function getProductsWithSeparatedGifts()
     {
-        $products = $this->splitGiftsProductsQuantity()
-            ->getProducts($refresh = true);
+        // These are kept for backward compatibility, modules might expect
+        // this state set to true, but it doesn't do anything anymore.
+        $this->splitGiftsProductsQuantity();
+        $products = $this->getProducts(
+            refresh: false,
+            id_product: false,
+            id_country: null,
+            fullInfos: true,
+            keepOrderPrices: false,
+            shouldSplitGiftProductsQuantity: true
+        );
+        // These are kept for backward compatibility, modules might expect
+        // this state reset to false, but it doesn't do anything anymore.
         $this->mergeGiftsProductsQuantity();
 
         return $products;

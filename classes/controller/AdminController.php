@@ -2136,7 +2136,7 @@ class AdminControllerCore extends Controller
     private function getTabs($parentId = 0, $level = 0)
     {
         $tabs = Tab::getTabs($this->context->language->id, $parentId);
-        $current_id = Tab::getCurrentParentId();
+        $current_id = (int) Tab::getCurrentParentId();
 
         foreach ($tabs as $index => $tab) {
             if (!Tab::checkTabRights($tab['id_tab'])
@@ -3725,10 +3725,9 @@ class AdminControllerCore extends Controller
         }
 
         /* Multilingual fields */
-        $class_vars = get_class_vars(get_class($object));
         $fields = [];
-        if (isset($class_vars['definition']['fields'])) {
-            $fields = $class_vars['definition']['fields'];
+        if (isset($object::$definition['fields'])) {
+            $fields = $object::$definition['fields'];
         }
 
         foreach ($fields as $field => $params) {

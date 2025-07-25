@@ -26,6 +26,7 @@
 
 use PrestaShop\PrestaShop\Adapter\ContainerFinder;
 use PrestaShop\PrestaShop\Core\Domain\CartRule\CartRuleSettings;
+use PrestaShop\PrestaShop\Core\Domain\Discount\ValueObject\DiscountType;
 use PrestaShop\PrestaShop\Core\FeatureFlag\FeatureFlagSettings;
 use PrestaShop\PrestaShop\Core\FeatureFlag\FeatureFlagStateCheckerInterface;
 
@@ -75,6 +76,7 @@ class CartRuleCore extends ObjectModel
     public $minimum_amount_currency;
     /** @var bool */
     public $minimum_amount_shipping;
+    public $minimum_product_quantity;
     /** @var bool */
     public $country_restriction;
     /** @var bool */
@@ -133,6 +135,7 @@ class CartRuleCore extends ObjectModel
             'minimum_amount_tax' => ['type' => self::TYPE_BOOL, 'validate' => 'isBool'],
             'minimum_amount_currency' => ['type' => self::TYPE_INT, 'validate' => 'isInt'],
             'minimum_amount_shipping' => ['type' => self::TYPE_BOOL, 'validate' => 'isBool'],
+            'minimum_product_quantity' => ['type' => self::TYPE_INT, 'validate' => 'isInt'],
             'country_restriction' => ['type' => self::TYPE_BOOL, 'validate' => 'isBool'],
             'carrier_restriction' => ['type' => self::TYPE_BOOL, 'validate' => 'isBool'],
             'group_restriction' => ['type' => self::TYPE_BOOL, 'validate' => 'isBool'],
@@ -885,6 +888,13 @@ class CartRuleCore extends ObjectModel
             }
         }
 
+        // Check if the minimal product quantity is met (if defined)
+        if ($this->minimum_product_quantity) {
+            if ($cart->nbProducts() < $this->minimum_product_quantity) {
+                return (!$display_error) ? false : $this->trans('You cannot use this voucher with these products', [], 'Shop.Notifications.Error');
+            }
+        }
+
         // Check if the cart rule is only usable by a specific customer, and if the current customer is the right one
         if ($this->id_customer && $cart->id_customer != $this->id_customer) {
             if (!Context::getContext()->customer->isLogged()) {
@@ -1152,6 +1162,36 @@ class CartRuleCore extends ObjectModel
                             $eligible_products_list = $this->filterProducts($eligible_products_list, $matching_products_list, $product_rule['type']);
 
                             break;
+                        case 'combinations':
+                            $cart_combinations = Db::getInstance()->executeS('
+							SELECT cp.quantity, cp.`id_product`, cp.`id_product_attribute`
+							FROM `' . _DB_PREFIX_ . 'cart_product` cp
+							WHERE cp.`id_cart` = ' . (int) $cart->id . '
+							AND CONCAT(cp.`id_product`, "-", cp.`id_product_attribute`) IN (' . implode(',', array_map(fn ($combinationIdentifier) => '"' . $combinationIdentifier . '"', $eligible_products_list)) . ')');
+                            $count_matching_combinations = 0;
+                            $matching_combinations_list = [];
+                            foreach ($cart_combinations as $cart_combination) {
+                                if (in_array($cart_combination['id_product_attribute'], $product_rule['values'])) {
+                                    $count_matching_combinations += $cart_combination['quantity'];
+                                    // Todo: Handle correct check when combination gift is handled
+                                    if ($alreadyInCart && $this->gift_product == $cart_combination['id_product']) {
+                                        --$count_matching_combinations;
+                                    }
+                                    $matching_combinations_list[] = $cart_combination['id_product'] . '-' . $cart_combination['id_product_attribute'];
+                                }
+                            }
+                            if ($count_matching_combinations < $product_rule_group['quantity']) {
+                                if ($countRulesProduct === 1) {
+                                    return (!$displayError) ? false : $this->trans('You cannot use this voucher with these products', [], 'Shop.Notifications.Error');
+                                } else {
+                                    ++$condition;
+
+                                    break;
+                                }
+                            }
+                            $eligible_products_list = $this->filterProducts($eligible_products_list, $matching_combinations_list, $product_rule['type']);
+
+                            break;
                         case 'categories':
                             $cart_categories = Db::getInstance()->executeS('
 							SELECT cp.quantity, cp.`id_product`, cp.`id_product_attribute`, catp.`id_category`
@@ -1243,6 +1283,8 @@ class CartRuleCore extends ObjectModel
                             $eligible_products_list = $this->filterProducts($eligible_products_list, $matching_products_list, $product_rule['type']);
 
                             break;
+                        default:
+                            return (!$displayError) ? false : $this->trans('Unknown type of product restriction', [], 'Shop.Notifications.Error');
                     }
                     if (!count($eligible_products_list)) {
                         if ($countRulesProduct === 1) {
@@ -1276,6 +1318,30 @@ class CartRuleCore extends ObjectModel
     {
         if (!CartRule::isFeatureActive()) {
             return 0;
+        }
+
+        /*
+         * Custom cart rule value from modules. Allows to create infinite possibilities of rules.
+         *
+         * If a module is applying a custom value using actionApplyCartRule, it should also apply
+         * the same value here.
+         */
+        $contextualValueFromModules = null;
+        Hook::exec(
+            'actionGetCartRuleContextualValue',
+            [
+                'cart_rule' => $this,
+                'use_tax' => $use_tax,
+                'context' => $context,
+                'filter' => $filter,
+                'package' => $package,
+                'use_cache' => $use_cache,
+                'contextualValueFromModules' => &$contextualValueFromModules,
+            ]
+        );
+        // @phpstan-ignore-next-line
+        if ($contextualValueFromModules !== null) {
+            return $contextualValueFromModules;
         }
 
         // set base price that will be used for percent reductions
@@ -1343,6 +1409,22 @@ class CartRuleCore extends ObjectModel
 
         if (in_array($filter, [CartRule::FILTER_ACTION_ALL, CartRule::FILTER_ACTION_ALL_NOCAP, CartRule::FILTER_ACTION_REDUCTION])) {
             $order_package_products_total = 0;
+
+            $containerFinder = new ContainerFinder(Context::getContext());
+            $container = $containerFinder->getContainer();
+            $featureFlagManager = $container->get(FeatureFlagStateCheckerInterface::class);
+
+            if ($featureFlagManager !== null && $featureFlagManager->isEnabled(FeatureFlagSettings::FEATURE_FLAG_DISCOUNT)) {
+                if ($this->type === DiscountType::ORDER_LEVEL && $this->reduction_percent > 0.00 && $this->reduction_product == 0) {
+                    $order_products_total = $context->cart->getOrderTotal($use_tax, Cart::ONLY_PRODUCTS, $package_products);
+                    $order_shipping_total = $context->cart->getOrderTotal($use_tax, Cart::ONLY_SHIPPING, $package_products);
+                    $order_total = $order_products_total + $order_shipping_total;
+                    $reduction_value += $order_total * $this->reduction_percent / 100;
+
+                    return $reduction_value;
+                }
+            }
+
             if ((float) $this->reduction_amount > 0
                 || (float) $this->reduction_percent && $this->reduction_product == 0) {
                 $order_package_products_total = $context->cart->getOrderTotal($use_tax, Cart::ONLY_PRODUCTS, $package_products);
@@ -1518,7 +1600,17 @@ class CartRuleCore extends ObjectModel
 
                         // The reduction cannot exceed the products total, except when we do not want it to be limited (for the partial use calculation)
                         if ($filter != CartRule::FILTER_ACTION_ALL_NOCAP) {
-                            $reduction_amount = min($reduction_amount, $this->reduction_tax ? $cart_amount_ti : $cart_amount_te);
+                            if ($featureFlagManager !== null && $featureFlagManager->isEnabled(FeatureFlagSettings::FEATURE_FLAG_DISCOUNT) && $this->type === DiscountType::ORDER_LEVEL) {
+                                $max_reduction_amount = $this->reduction_tax
+                                    ? $cart_amount_ti + $context->cart->getOrderTotal(true, Cart::ONLY_SHIPPING, $package_products)
+                                    : $cart_amount_te + $context->cart->getOrderTotal(false, Cart::ONLY_SHIPPING, $package_products);
+                                $reduction_amount = min(
+                                    $reduction_amount,
+                                    $max_reduction_amount,
+                                );
+                            } else {
+                                $reduction_amount = min($reduction_amount, $this->reduction_tax ? $cart_amount_ti : $cart_amount_te);
+                            }
                         }
 
                         if ($this->reduction_tax && !$use_tax) {
@@ -1562,6 +1654,12 @@ class CartRuleCore extends ObjectModel
                         }
 
                         $current_cart_amount = max($current_cart_amount - (float) $previous_reduction_amount, 0);
+                    }
+
+                    if ($featureFlagManager !== null && $featureFlagManager->isEnabled(FeatureFlagSettings::FEATURE_FLAG_DISCOUNT) && $this->type === DiscountType::ORDER_LEVEL) {
+                        $current_cart_amount += $this->reduction_tax
+                            ? $context->cart->getOrderTotal(true, Cart::ONLY_SHIPPING, $package_products)
+                            : $context->cart->getOrderTotal(false, Cart::ONLY_SHIPPING, $package_products);
                     }
 
                     $reduction_value = min($reduction_value, $current_cart_amount);
