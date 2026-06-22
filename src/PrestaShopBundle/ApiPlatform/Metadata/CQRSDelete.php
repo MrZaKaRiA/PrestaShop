@@ -1,27 +1,7 @@
 <?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 
 declare(strict_types=1);
@@ -33,7 +13,6 @@ use ApiPlatform\OpenApi\Attributes\Webhook;
 use ApiPlatform\OpenApi\Model\Operation as OpenApiOperation;
 use ApiPlatform\State\OptionsInterface;
 use Attribute;
-use PrestaShopBundle\ApiPlatform\Provider\QueryProvider;
 use Stringable;
 
 /**
@@ -42,7 +21,7 @@ use Stringable;
  * but you can also use PATCH method.
  */
 #[Attribute(Attribute::TARGET_CLASS | Attribute::IS_REPEATABLE)]
-class CQRSDelete extends AbstractCQRSOperation
+class CQRSDelete extends CQRSCommand
 {
     public function __construct(
         ?string $uriTemplate = null,
@@ -121,19 +100,24 @@ class CQRSDelete extends AbstractCQRSOperation
         array|Parameters|null $parameters = null,
         ?bool $queryParameterValidationEnabled = null,
         array $extraProperties = [],
-        ?string $CQRSQuery = null,
+        ?string $CQRSCommand = null,
         array $scopes = [],
-        ?array $CQRSQueryMapping = null,
         ?array $ApiResourceMapping = null,
+        ?array $CQRSCommandMapping = null,
         ?bool $experimentalOperation = null,
+        ?bool $allowEmptyBody = null,
     ) {
         $passedArguments = \get_defined_vars();
         $passedArguments['method'] = self::METHOD_DELETE;
         // Usually DELETE operation has nothing to show so no output is needed
         $passedArguments['output'] = $output ?? false;
-        // Delete operations are performed like a query not a command, because API Platform has specific behaviour with DELETE methods that make
-        // it easier to use a provider instead of a processor
-        $passedArguments['provider'] = $provider ?? QueryProvider::class;
+        // By default, the ReadProvider will trigger a 404 exception with DELETE method, so we disable it unless said otherwise
+        $passedArguments['read'] = $read ?? false;
+        // For methods POST, PUT and PATCH deserialization is automatically enabled, not with DELETE and we need it to deserialize the command input
+        $passedArguments['deserialize'] = $deserialize ?? true;
+        // Usually DELETE request don't need a body as the only needed thing is the ID provided in the uri, so we enabled this custom setting,
+        // so that empty body is accepted
+        $passedArguments['allowEmptyBody'] = $allowEmptyBody ?? $extraProperties['allowEmptyBody'] ?? true;
 
         parent::__construct(...$passedArguments);
     }

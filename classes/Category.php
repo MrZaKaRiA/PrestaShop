@@ -1,32 +1,13 @@
 <?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 
 use PrestaShop\PrestaShop\Core\Domain\Category\CategorySettings;
 use PrestaShop\PrestaShop\Core\Domain\Category\SeoSettings;
 use PrestaShop\PrestaShop\Core\Domain\Category\ValueObject\RedirectType;
+use PrestaShop\PrestaShop\Core\Domain\Product\ValueObject\RedirectType as ProductRedirectType;
 
 /**
  * Class CategoryCore.
@@ -411,6 +392,7 @@ class CategoryCore extends ObjectModel
         $allCat[] = $this;
         foreach ($allCat as $cat) {
             $cat->deleteLite();
+            $cat->deleteRedirections();
             if (!$cat->hasMultishopEntries()) {
                 $cat->deleteImage();
                 $cat->cleanGroups();
@@ -433,6 +415,34 @@ class CategoryCore extends ObjectModel
         Hook::exec('actionCategoryDelete', ['category' => $this, 'deleted_children' => $deletedChildren]);
 
         return true;
+    }
+
+    /**
+     * Resets all entries where this category was used as a redirection target
+     *
+     * @return bool
+     */
+    public function deleteRedirections(): bool
+    {
+        $productTableUpdateResult = Db::getInstance()->update(
+            'product',
+            ['redirect_type' => ProductRedirectType::TYPE_DEFAULT, 'id_type_redirected' => 0],
+            '(redirect_type = \'' . ProductRedirectType::TYPE_CATEGORY_TEMPORARY . '\' OR redirect_type = \'' . ProductRedirectType::TYPE_CATEGORY_PERMANENT . '\') AND id_type_redirected = ' . (int) $this->id
+        );
+
+        $productShopTableUpdateResult = Db::getInstance()->update(
+            'product_shop',
+            ['redirect_type' => ProductRedirectType::TYPE_DEFAULT, 'id_type_redirected' => 0],
+            '(redirect_type = \'' . ProductRedirectType::TYPE_CATEGORY_TEMPORARY . '\' OR redirect_type = \'' . ProductRedirectType::TYPE_CATEGORY_PERMANENT . '\') AND id_type_redirected = ' . (int) $this->id
+        );
+
+        $categoryTableUpdateResult = Db::getInstance()->update(
+            'category',
+            ['redirect_type' => RedirectType::TYPE_PERMANENT, 'id_type_redirected' => 0],
+            '(redirect_type = \'' . RedirectType::TYPE_TEMPORARY . '\' OR redirect_type = \'' . RedirectType::TYPE_PERMANENT . '\') AND id_type_redirected = ' . (int) $this->id
+        );
+
+        return $productTableUpdateResult && $productShopTableUpdateResult && $categoryTableUpdateResult;
     }
 
     /**
@@ -1893,26 +1903,32 @@ class CategoryCore extends ObjectModel
     }
 
     /**
-     * Returns the number of categories + 1 having $idCategoryParent as parent.
+     * Returns the next position to assign to a new category.
+     * Category positions start at 0.
      *
-     * @param int $idCategoryParent The parent category
+     * Since this method is called *after* the category has already been created
+     * (with position 0 by default), using MAX(position) alone would always return 1,
+     * even for the very first category.
+     *
+     * Therefore, we check how many categories already exist under the same parent.
+     * - If there's only one (i.e., the newly created one), we return 0.
+     * - If there are two or more, we return MAX(position) + 1.
+     *
+     * @param int $idCategoryParent ID of the parent category
      * @param int $idShop Shop ID
      *
-     * @return int Number of categories + 1 having $idCategoryParent as parent
-     *
-     * @todo     rename that function to make it understandable (getNextPosition for example)
+     * @return int Position to use
      */
     public static function getLastPosition($idCategoryParent, $idShop)
     {
-        // @TODO, if we remove this query, the position will begin at 1 instead of 0, but is this really a problem?
-        $results = Db::getInstance()->executeS('
+        $childrenCount = Db::getInstance()->executeS('
 				SELECT 1
 				FROM `' . _DB_PREFIX_ . 'category` c
 				 JOIN `' . _DB_PREFIX_ . 'category_shop` cs
 				ON (c.`id_category` = cs.`id_category` AND cs.`id_shop` = ' . (int) $idShop . ')
 				WHERE c.`id_parent` = ' . (int) $idCategoryParent . ' LIMIT 2');
 
-        if (count($results) === 1) {
+        if (count($childrenCount) === 1) {
             return 0;
         } else {
             $maxPosition = (int) Db::getInstance()->getValue('
@@ -1963,7 +1979,8 @@ class CategoryCore extends ObjectModel
             $shop = Context::getContext()->shop;
         }
 
-        if (!$interval = Category::getInterval($shop->getCategory())) {
+        // Verify we got the interval of shop category
+        if (empty($interval = Category::getInterval($shop->getCategory()))) {
             return false;
         }
 
@@ -1984,14 +2001,21 @@ class CategoryCore extends ObjectModel
             $shop = Context::getContext()->shop;
         }
 
-        if (!$interval = Category::getInterval($shop->getCategory())) {
+        // Verify we got the interval of shop category
+        if (empty($interval = Category::getInterval($shop->getCategory()))) {
             return false;
         }
+
         $sql = new DbQuery();
         $sql->select('c.`nleft`, c.`nright`');
         $sql->from('category', 'c');
         $sql->where('c.`id_category` = ' . (int) $idCategory);
         $row = Db::getInstance(_PS_USE_SQL_SLAVE_)->getRow($sql);
+
+        // If it doesn't exist, we can end up right here
+        if (empty($row)) {
+            return false;
+        }
 
         return $row['nleft'] >= $interval['nleft'] && $row['nright'] <= $interval['nright'];
     }

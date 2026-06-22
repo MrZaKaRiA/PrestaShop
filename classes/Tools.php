@@ -1,27 +1,7 @@
 <?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 
 use Composer\CaBundle\CaBundle;
@@ -265,7 +245,7 @@ class ToolsCore
             $httpHost = $_SERVER['HTTP_HOST'];
         }
 
-        $host = (isset($_SERVER['HTTP_X_FORWARDED_HOST']) ? $_SERVER['HTTP_X_FORWARDED_HOST'] : $httpHost);
+        $host = (!empty($_SERVER['HTTP_X_FORWARDED_HOST']) ? $_SERVER['HTTP_X_FORWARDED_HOST'] : $httpHost);
         if ($ignore_port && $pos = strpos($host, ':')) {
             $host = substr($host, 0, $pos);
         }
@@ -333,7 +313,7 @@ class ToolsCore
      */
     public static function getServerName()
     {
-        if (isset($_SERVER['HTTP_X_FORWARDED_SERVER']) && $_SERVER['HTTP_X_FORWARDED_SERVER']) {
+        if (!empty($_SERVER['HTTP_X_FORWARDED_SERVER'])) {
             return $_SERVER['HTTP_X_FORWARDED_SERVER'];
         }
 
@@ -357,7 +337,7 @@ class ToolsCore
             $_SERVER['HTTP_X_FORWARDED_FOR'] = $headers['X-Forwarded-For'];
         }
 
-        if (isset($_SERVER['HTTP_X_FORWARDED_FOR']) && $_SERVER['HTTP_X_FORWARDED_FOR'] && (!isset($_SERVER['REMOTE_ADDR'])
+        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR']) && (!isset($_SERVER['REMOTE_ADDR'])
             || preg_match('/^127\..*/i', trim($_SERVER['REMOTE_ADDR'])) || preg_match('/^172\.(1[6-9]|2\d|30|31)\..*/i', trim($_SERVER['REMOTE_ADDR']))
             || preg_match('/^192\.168\.*/i', trim($_SERVER['REMOTE_ADDR'])) || preg_match('/^10\..*/i', trim($_SERVER['REMOTE_ADDR'])))) {
             if (strpos($_SERVER['HTTP_X_FORWARDED_FOR'], ',')) {
@@ -536,7 +516,10 @@ class ToolsCore
     }
 
     /**
-     * Change language in cookie while clicking on a flag.
+     * This method was named "Change language in cookie while clicking on a flag.",
+     * but as of 25.12.2025, it does not really work at all. Language detection will
+     * never work because the language is exclusively determined by the URL, the isolang
+     * is always set and the HTTP_ACCEPT_LANGUAGE is not parsed properly anyway.
      *
      * @return string iso code
      */
@@ -592,7 +575,17 @@ class ToolsCore
     }
 
     /**
-     * If necessary change cookie language ID and context language.
+     * Detects proper id_language by the isolang parameter in the request and assigns
+     * it to the context and cookie. The method naming is a bit confusing as it does
+     * not switch anything. Language is exclusively determined by the URL.
+     *
+     * @todo - The behavior is a bit non stable, it should probably throw exceptions
+     * or somehow notify that nonsense is being present. If you for example pass a non
+     * existent language in the URL and you get "zz" in isolang, you will end up with:
+     * $_GET['isolang'] = zz
+     * $_GET['id_lang'] = null
+     * $context->cookie->id_lang = default language id from config.inc.php
+     * $context->language = default language from config.inc.php
      *
      * @param Context|null $context
      *
@@ -611,6 +604,11 @@ class ToolsCore
             return;
         }
 
+        /*
+         * This takes the isolang parameter from $_GET, converts it to an id_lang
+         * and assigns it into the GET. The isolang in the request always set by the Dispatcher.
+         * Either to a language code from the URL or the default language.
+         */
         if (
             ($iso = Tools::getValue('isolang'))
             && Validate::isLanguageIsoCode($iso)
@@ -622,6 +620,16 @@ class ToolsCore
         // Only switch if new ID is different from old ID
         $newLanguageId = (int) Tools::getValue('id_lang');
 
+        /*
+         * If we got a sensible language ID from the request, we will set it into the cookie
+         * and set it as the context language. There is already a default language set in the
+         * context from config.inc.php.
+         *
+         * @todo Please note that the cookie language ID has no effect as the language
+         * is exclusively determined by the URL. It may only by accessed by some really old
+         * codebase to read the language ID, but they should be updated to use the context
+         * language directly.
+         */
         if (
             Validate::isUnsignedId($newLanguageId)
             && $newLanguageId !== 0
@@ -1822,8 +1830,6 @@ class ToolsCore
 
                 throw new Exception($errorMessage);
             }
-
-            curl_close($curl);
         }
 
         return $content;
@@ -1920,11 +1926,11 @@ class ToolsCore
         if (!in_array(strtolower($scheme), ['http', 'https'], true)) {
             return false;
         }
-        $remoteFile = fopen($url, 'rb');
+        $remoteFile = @fopen($url, 'rb');
         if (!$remoteFile) {
             return false;
         }
-        $localFile = fopen(basename($url), 'wb');
+        $localFile = @fopen(basename($url), 'wb');
         if (!$localFile) {
             return false;
         }
@@ -2210,9 +2216,14 @@ class ToolsCore
             }
         }
 
-        if (Configuration::get('PS_WEBSERVICE_CGI_HOST')) {
-            fwrite($write_fd, "RewriteCond %{HTTP:Authorization} ^(.*)\nRewriteRule . - [E=HTTP_AUTHORIZATION:%1]\n\n");
-        }
+        /*
+         * Propagate authorization header to PHP that is normally removed by Apache.
+         * In the past, it was passed only if PS_WEBSERVICE_CGI_HOST was enabled,
+         * but today, there is no reason not to pass it.
+         */
+        fwrite($write_fd, "# Sets the HTTP_AUTHORIZATION header removed by apache\n");
+        fwrite($write_fd, "RewriteCond %{HTTP:Authorization} .\n");
+        fwrite($write_fd, "RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]\n\n");
 
         foreach ($domains as $domain => $list_uri) {
             // As we use regex in the htaccess, ipv6 surrounded by brackets must be escaped
@@ -2605,28 +2616,8 @@ FileETag none
     {
         return '<?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 
 header("Expires: Mon, 26 Jul 1997 05:00:00 GMT");
@@ -3190,7 +3181,7 @@ exit;
      */
     public static function isPHPCLI()
     {
-        return defined('STDIN') || (Tools::strtolower(PHP_SAPI) == 'cli' && (!isset($_SERVER['REMOTE_ADDR']) || empty($_SERVER['REMOTE_ADDR'])));
+        return defined('STDIN') || (Tools::strtolower(PHP_SAPI) == 'cli' && empty($_SERVER['REMOTE_ADDR']));
     }
 
     public static function argvToGET($argc, $argv)
@@ -3438,13 +3429,33 @@ exit;
         return false;
     }
 
-    public static function unSerialize($serialized, $object = false)
+    /**
+     * Safely unserializes input string with protection against object injection.
+     *
+     * @param string $serialized Serialized string to decode
+     * @param bool $allowObjects Whether to allow object unserialization
+     *
+     * @return mixed|null Unserialized data or false on failure
+     */
+    public static function unSerialize($serialized, $allowObjects = false)
     {
-        if (is_string($serialized) && (strpos($serialized, 'O:') === false || !preg_match('/(^|;|{|})O:[0-9]+:"/', $serialized)) && !$object || $object) {
-            return @unserialize($serialized);
+        // Only allow if it's a string
+        if (!is_string($serialized)) {
+            return false;
         }
 
-        return false;
+        // Check for potentially malicious serialized objects
+        if (!$allowObjects) {
+            if (str_contains($serialized, 'O:') && preg_match('/(^|;|{|})O:[0-9]+:"/', $serialized)) {
+                return false;
+            }
+
+            // Use native protection only if we disallow objects
+            return @unserialize($serialized, ['allowed_classes' => false]);
+        }
+
+        // Otherwise allow objects as usual
+        return @unserialize($serialized);
     }
 
     /**
@@ -3665,6 +3676,9 @@ exit;
                     if ($allow_style) {
                         $def->addElement('style', 'Block', 'Flow', 'Common', ['type' => 'Text']);
                     }
+                    Hook::exec('actionModifyHtmlPurifierConfig', [
+                        'config' => &$config,
+                    ]);
                 }
 
                 $purifier = new HTMLPurifier($config);

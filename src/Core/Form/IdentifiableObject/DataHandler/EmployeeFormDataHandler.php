@@ -1,31 +1,12 @@
 <?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 
 namespace PrestaShop\PrestaShop\Core\Form\IdentifiableObject\DataHandler;
 
+use Cookie;
 use PrestaShop\PrestaShop\Core\CommandBus\CommandBusInterface;
 use PrestaShop\PrestaShop\Core\Context\EmployeeContext;
 use PrestaShop\PrestaShop\Core\Crypto\Hashing;
@@ -98,6 +79,10 @@ final class EmployeeFormDataHandler implements FormDataHandlerInterface
      */
     private $maxLength;
 
+    private bool $boAllowEmployeeFormLang;
+
+    private Cookie $legacyContextCookie;
+
     public function __construct(
         CommandBusInterface $bus,
         array $defaultShopAssociation,
@@ -109,6 +94,8 @@ final class EmployeeFormDataHandler implements FormDataHandlerInterface
         int $minLength,
         int $maxLength,
         int $minScore,
+        bool $boAllowEmployeeFormLang,
+        Cookie $legacyContextCookie,
         private readonly EmployeeContext $employeeContext,
         private readonly TokenStorageInterface $tokenStorage,
         private readonly EmployeeRepository $employeeRepository,
@@ -125,6 +112,8 @@ final class EmployeeFormDataHandler implements FormDataHandlerInterface
         $this->minLength = $minLength;
         $this->maxLength = $maxLength;
         $this->minScore = $minScore;
+        $this->boAllowEmployeeFormLang = $boAllowEmployeeFormLang;
+        $this->legacyContextCookie = $legacyContextCookie;
     }
 
     /**
@@ -219,23 +208,12 @@ final class EmployeeFormDataHandler implements FormDataHandlerInterface
             }
         }
 
-        /**
-         * IMPORTANT : Apply all validations before file upload
-         *
-         * During avatar upload, EmployeeController::editAction takes image path
-         * from `$_FILES["employee"]["tmp_name"]["avatarUrl"]`
-         * But AbstractImageUploader::createTemporaryImage($image) executes
-         * `move_uploaded_file($image->getPathname(), $temporaryImageName))`
-         * that removes the image but keep $_FILES["employee"]["tmp_name"]["avatarUrl"] value.
-         *
-         * During data validation (`setXXX($value)` apply validation),
-         * any error would break the workflow and call `render(...)`
-         * (cf. EmployeeController::editAction).
-         * But `DispatcherCore::getInstance(...)` runs
-         * `$request = SymfonyRequest::createFromGlobals()` that take `$_FILES` global variable.
-         * Then during Request object creation,
-         * `$_FILES["employee"]["tmp_name"]["avatarUrl"]` is detected as invalid.
-         */
+        // If Config, Save in cookie the language for Employee
+        if ($this->boAllowEmployeeFormLang) {
+            $this->legacyContextCookie->employee_form_lang = $command->getLanguageId();
+            $this->legacyContextCookie->write();
+        }
+
         /** @var UploadedFile $uploadedAvatar */
         $uploadedAvatar = $data['avatarUrl'];
         if ($uploadedAvatar instanceof UploadedFile) {

@@ -1,27 +1,7 @@
 <?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 
 declare(strict_types=1);
@@ -129,6 +109,7 @@ class CQRSCommand extends AbstractCQRSOperation
         ?array $ApiResourceMapping = null,
         ?array $CQRSCommandMapping = null,
         ?bool $experimentalOperation = null,
+        ?bool $allowEmptyBody = null,
     ) {
         $passedArguments = \get_defined_vars();
 
@@ -144,9 +125,15 @@ class CQRSCommand extends AbstractCQRSOperation
             $passedArguments['extraProperties']['CQRSCommandMapping'] = $CQRSCommandMapping;
         }
 
+        if ($allowEmptyBody !== null) {
+            $this->checkArgumentAndExtraParameterValidity('allowEmptyBody', $allowEmptyBody, $passedArguments['extraProperties']);
+            $passedArguments['extraProperties']['allowEmptyBody'] = $allowEmptyBody;
+        }
+
         // Remove custom arguments
         unset($passedArguments['CQRSCommand']);
         unset($passedArguments['CQRSCommandMapping']);
+        unset($passedArguments['allowEmptyBody']);
 
         // By default, the CQRS command is used as the input base class as it contains the exact available parameters for this operation
         // Exception in case the class doesn't exist we don't force the input because InputOutputResourceMetadataCollectionFactory will raise an exception when the resources are parsed
@@ -166,7 +153,8 @@ class CQRSCommand extends AbstractCQRSOperation
     {
         $self = clone $this;
         $self->extraProperties['CQRSCommand'] = $CQRSCommand;
-        if ($this->input === $this->extraProperties['CQRSCommand']) {
+        // Test if the input was a copy of the CQRSCommand extra property, set in the constructor (if none was set then we can copy it as well)
+        if (empty($this->input) || empty($this->extraProperties['CQRSCommand']) || $this->input === $this->extraProperties['CQRSCommand']) {
             $self->input = $CQRSCommand;
         }
 
@@ -186,10 +174,23 @@ class CQRSCommand extends AbstractCQRSOperation
         return $this->extraProperties['CQRSCommandMapping'] ?? null;
     }
 
-    public function withCQRSCommandMapping(array $CQRSQuery): static
+    public function withCQRSCommandMapping(array $CQRSCommandMapping): static
     {
         $self = clone $this;
-        $self->extraProperties['CQRSCommandMapping'] = $CQRSQuery;
+        $self->extraProperties['CQRSCommandMapping'] = $CQRSCommandMapping;
+
+        return $self;
+    }
+
+    public function getAllowEmptyBody(): ?bool
+    {
+        return $this->extraProperties['allowEmptyBody'] ?? null;
+    }
+
+    public function withAllowEmptyBody(bool $allowEmptyBody): static
+    {
+        $self = clone $this;
+        $self->extraProperties['allowEmptyBody'] = $allowEmptyBody;
 
         return $self;
     }

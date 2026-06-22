@@ -1,27 +1,7 @@
 <?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 
 declare(strict_types=1);
@@ -30,6 +10,8 @@ namespace PrestaShopBundle\Controller\Admin\Sell\Catalog\Product;
 
 use Doctrine\ORM\EntityManagerInterface;
 use Exception;
+use HelperTreeCategories;
+use PrestaShop\PrestaShop\Adapter\Category\CategoryDataProvider;
 use PrestaShop\PrestaShop\Adapter\LegacyContext;
 use PrestaShop\PrestaShop\Adapter\Module\ModuleDataProvider;
 use PrestaShop\PrestaShop\Adapter\Product\Repository\ProductRepository;
@@ -453,7 +435,7 @@ class ProductController extends PrestaShopAdminController
      *
      * @return Response
      */
-    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", message: 'You do not have permission to update this.')]
+    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", message: 'You do not have permission to update this.', redirectRoute: 'admin_products_index')]
     public function editAction(
         Request $request,
         int $productId,
@@ -627,7 +609,7 @@ class ProductController extends PrestaShopAdminController
      *
      * @return Response
      */
-    #[AdminSecurity("is_granted('delete', request.get('_legacy_controller'))", message: 'You do not have permission to delete this.')]
+    #[AdminSecurity("is_granted('delete', request.get('_legacy_controller'))", message: 'You do not have permission to delete this.', jsonResponse: true)]
     public function bulkDeleteFromShopAction(Request $request, int $shopId): Response
     {
         $shopConstraint = ShopConstraint::shop($shopId);
@@ -643,7 +625,7 @@ class ProductController extends PrestaShopAdminController
      *
      * @return Response
      */
-    #[AdminSecurity("is_granted('delete', request.get('_legacy_controller'))", message: 'You do not have permission to delete this.')]
+    #[AdminSecurity("is_granted('delete', request.get('_legacy_controller'))", message: 'You do not have permission to delete this.', jsonResponse: true)]
     public function bulkDeleteFromShopGroupAction(Request $request, int $shopGroupId): Response
     {
         $shopConstraint = ShopConstraint::shopGroup($shopGroupId);
@@ -930,7 +912,7 @@ class ProductController extends PrestaShopAdminController
      *
      * @return JsonResponse
      */
-    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.')]
+    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.', jsonResponse: true)]
     public function bulkEnableAllShopsAction(Request $request): JsonResponse
     {
         $shopConstraint = ShopConstraint::allShops();
@@ -949,7 +931,7 @@ class ProductController extends PrestaShopAdminController
      *
      * @return JsonResponse
      */
-    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.')]
+    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.', jsonResponse: true)]
     public function bulkEnableShopAction(Request $request, int $shopId): JsonResponse
     {
         $shopConstraint = ShopConstraint::shop($shopId);
@@ -968,7 +950,7 @@ class ProductController extends PrestaShopAdminController
      *
      * @return JsonResponse
      */
-    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.')]
+    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.', jsonResponse: true)]
     public function bulkEnableShopGroupAction(Request $request, int $shopGroupId): JsonResponse
     {
         $shopConstraint = ShopConstraint::shopGroup($shopGroupId);
@@ -986,7 +968,7 @@ class ProductController extends PrestaShopAdminController
      *
      * @return JsonResponse
      */
-    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.')]
+    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.', jsonResponse: true)]
     public function bulkDisableAllShopsAction(Request $request): JsonResponse
     {
         $shopConstraint = ShopConstraint::allShops();
@@ -1005,7 +987,7 @@ class ProductController extends PrestaShopAdminController
      *
      * @return JsonResponse
      */
-    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.')]
+    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.', jsonResponse: true)]
     public function bulkDisableShopAction(Request $request, int $shopId): JsonResponse
     {
         $shopConstraint = ShopConstraint::shop($shopId);
@@ -1024,7 +1006,7 @@ class ProductController extends PrestaShopAdminController
      *
      * @return JsonResponse
      */
-    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.')]
+    #[AdminSecurity("is_granted('update', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.', jsonResponse: true)]
     public function bulkDisableShopGroupAction(Request $request, int $shopGroupId): JsonResponse
     {
         $shopConstraint = ShopConstraint::shopGroup($shopGroupId);
@@ -1042,7 +1024,7 @@ class ProductController extends PrestaShopAdminController
      *
      * @return JsonResponse
      */
-    #[AdminSecurity("is_granted('create', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.')]
+    #[AdminSecurity("is_granted('create', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.', jsonResponse: true)]
     public function bulkDuplicateAllShopsAction(Request $request): JsonResponse
     {
         $shopConstraint = ShopConstraint::allShops();
@@ -1061,7 +1043,7 @@ class ProductController extends PrestaShopAdminController
      *
      * @return JsonResponse
      */
-    #[AdminSecurity("is_granted('create', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.')]
+    #[AdminSecurity("is_granted('create', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.', jsonResponse: true)]
     public function bulkDuplicateShopAction(Request $request, int $shopId): JsonResponse
     {
         $shopConstraint = ShopConstraint::shop($shopId);
@@ -1080,7 +1062,7 @@ class ProductController extends PrestaShopAdminController
      *
      * @return JsonResponse
      */
-    #[AdminSecurity("is_granted('create', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.')]
+    #[AdminSecurity("is_granted('create', request.get('_legacy_controller'))", redirectRoute: 'admin_products_index', message: 'You do not have permission to edit this.', jsonResponse: true)]
     public function bulkDuplicateShopGroupAction(Request $request, int $shopGroupId): JsonResponse
     {
         $shopConstraint = ShopConstraint::shopGroup($shopGroupId);
@@ -1501,7 +1483,6 @@ class ProductController extends PrestaShopAdminController
      */
     private function getErrorMessages(): array
     {
-        // @todo: all the constraint error messages are missing for now (see ProductConstraintException)
         return [
             CannotDeleteProductException::class => $this->trans(
                 'An error occurred while deleting the object.',
@@ -1515,22 +1496,262 @@ class ProductController extends PrestaShopAdminController
             ),
             ProductConstraintException::class => [
                 ProductConstraintException::INVALID_PRICE => $this->trans(
-                    'Product price is invalid',
+                    'Product price is invalid.',
                     [],
                     'Admin.Notifications.Error'
                 ),
                 ProductConstraintException::INVALID_UNIT_PRICE => $this->trans(
-                    'Product price per unit is invalid',
+                    'Product price per unit is invalid.',
                     [],
                     'Admin.Notifications.Error'
                 ),
                 ProductConstraintException::INVALID_REDIRECT_TARGET => $this->trans(
-                    'When redirecting towards a product you must select a target product.',
+                    'Product "Redirection when offline" target is invalid.',
                     [],
                     'Admin.Catalog.Notification'
                 ),
                 ProductConstraintException::INVALID_ONLINE_DATA => $this->trans(
-                    'To put this product online, please enter a name.',
+                    'Product doesn\'t have the minimum data to go online.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_AVAILABLE_FOR_ORDER => $this->trans(
+                    'Product "Available for order" settings is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_REDIRECT_TYPE => $this->trans(
+                    'Product "Redirection when offline" behavior is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_SHOW_PRICE => $this->trans(
+                    'Product "Show price" settings is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_ONLINE_ONLY => $this->trans(
+                    'Product "Web only" settings is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_ADDITIONAL_SHIPPING_COST => $this->trans(
+                    'Product additional shipping cost is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_AVAILABLE_DATE => $this->trans(
+                    'Product availability date is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_AVAILABLE_NOW => $this->trans(
+                    'Product availability label when in stock is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_AVAILABLE_LATER => $this->trans(
+                    'Product availability label when out of stock is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_CONDITION => $this->trans(
+                    'Product condition is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_CUSTOMIZABILITY => $this->trans(
+                    'Product customization fields are invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_DELIVERY_TIME_IN_STOCK_NOTES => $this->trans(
+                    'Product delivery time when in stock are invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_ADDITIONAL_DELIVERY_TIME_NOTES_TYPE => $this->trans(
+                    'Product delivery times are invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_ADDITIONAL_TIME_NOTES_TYPE => $this->trans(
+                    'Product delivery times are invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_DELIVERY_TIME_OUT_OF_STOCK_NOTES => $this->trans(
+                    'Product delivery times when out of stock are invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_DEPTH => $this->trans(
+                    'Product depth is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_DESCRIPTION_CONTAINS_EMBEDDED_HTML => $this->trans(
+                    'Product description contains embedded HTML elements (iframe, frame, form, input, embed, object) which are not allowed. To allow them, enable "Allow iframes on HTML fields" in Shop Parameters > General settings.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_DESCRIPTION => $this->trans(
+                    'Product description is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_EAN_13 => $this->trans(
+                    'Product EAN13 field is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_ECOTAX => $this->trans(
+                    'Product ecotax is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_LINK_REWRITE => $this->trans(
+                    'Product friendly URL is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_GTIN => $this->trans(
+                    'Product GTIN field is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_HEIGHT => $this->trans(
+                    'Product height is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_ID => $this->trans(
+                    'Product ID is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_ISBN => $this->trans(
+                    'Product ISBN field is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_MANUFACTURER_ID => $this->trans(
+                    'Product manufacturer is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_META_DESCRIPTION => $this->trans(
+                    'Product meta description is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_META_TITLE => $this->trans(
+                    'Product meta title is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_MINIMAL_QUANTITY => $this->trans(
+                    'Product minimum quantity for sale is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_MPN => $this->trans(
+                    'Product MPN field is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_NAME => $this->trans(
+                    'Product name is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_REFERENCE => $this->trans(
+                    'Product reference is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_SHORT_DESCRIPTION => $this->trans(
+                    'Product short description is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_PRODUCT_TYPE => $this->trans(
+                    'Product type is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_VISIBILITY => $this->trans(
+                    'Product visibility settings is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_WEIGHT => $this->trans(
+                    'Product weight is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_WIDTH => $this->trans(
+                    'Product width is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_LOW_STOCK_ALERT => $this->trans(
+                    'Product "Low stock alert" settings is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_LOW_STOCK_THRESHOLD => $this->trans(
+                    'Product low stock alert treshold is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_SEARCH_LIMIT => $this->trans(
+                    'Search phrase limit is not valid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_SEARCH_PHRASE_LENGTH => $this->trans(
+                    'Search phrase length is not valid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_SHOW_CONDITION => $this->trans(
+                    'Product "Show condition" settings is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_STATUS => $this->trans(
+                    'Product status (active/inactive) is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_TAG => $this->trans(
+                    'Product tags are invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_TEXT_FIELDS_COUNT => $this->trans(
+                    'Product text customization fields are invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_UNITY => $this->trans(
+                    'Product unit in "price per unit" is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_UPC => $this->trans(
+                    'Product UPC field is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_UPLOADABLE_FILES_COUNT => $this->trans(
+                    'Product file customization fields is invalid.',
+                    [],
+                    'Admin.Catalog.Notification'
+                ),
+                ProductConstraintException::INVALID_WHOLESALE_PRICE => $this->trans(
+                    'Product wholesale price is invalid.',
                     [],
                     'Admin.Catalog.Notification'
                 ),
@@ -1643,5 +1864,57 @@ class ProductController extends PrestaShopAdminController
         $shopId = $this->getShopContext()->getId();
 
         return !empty($shopId) ? (int) $shopId : null;
+    }
+
+    /**
+     * Displays a category tree (legacy).
+     *
+     * This action is kept for backward compatibility with pages
+     * that still rely on HelperTreeCategories.
+     *
+     * @todo Remove this method once all pages depending on
+     *       HelperTreeCategories have been migrated to Symfony.
+     *
+     * @param Request $request
+     *
+     * @return Response
+     */
+    #[AdminSecurity("is_granted('create', request.get('_legacy_controller')) || is_granted('update', request.get('_legacy_controller')) || is_granted('read', request.get('_legacy_controller'))")]
+    public function legacyCategoryTreeAction(
+        Request $request,
+    ): Response {
+        $contextAdapter = $this->container->get(LegacyContext::class);
+        $rootCategoryId = (new CategoryDataProvider($contextAdapter))->getRootCategory()->id;
+        $category = $request->query->get('category', $rootCategoryId);
+        $full_tree = $request->query->get('fullTree', 0);
+        $use_check_box = $request->query->get('useCheckBox', 1);
+        $selected = $request->query->all('selected');
+        if (is_array($selected) === false) {
+            $selected = [$selected];
+        }
+        $id_tree = $request->query->get('type');
+        $input_name = str_replace(['[', ']'], '', $request->query->get('inputName', ''));
+
+        $tree = new HelperTreeCategories('subtree_associated_categories');
+        $tree->setTemplate('subtree_associated_categories.tpl')
+            ->setUseCheckBox($use_check_box)
+            ->setUseSearch(true)
+            ->setIdTree($id_tree)
+            ->setSelectedCategories($selected)
+            ->setFullTree($full_tree)
+            ->setChildrenOnly(true)
+            ->setNoJS(true)
+            ->setRootCategory($category);
+
+        if ($input_name) {
+            $tree->setInputName($input_name);
+        }
+
+        $contextAdapter->getContext()->smarty->setTemplateDir([
+            _PS_BO_ALL_THEMES_DIR_ . 'default/template/',
+            _PS_OVERRIDE_DIR_ . 'controllers' . DIRECTORY_SEPARATOR . 'admin' . DIRECTORY_SEPARATOR . 'templates',
+        ]);
+
+        return new Response($tree->render());
     }
 }

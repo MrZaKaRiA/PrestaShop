@@ -1,29 +1,13 @@
 <?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
+use PrestaShop\PrestaShop\Adapter\ContainerFinder;
 use PrestaShop\PrestaShop\Adapter\ServiceLocator;
+use PrestaShop\PrestaShop\Core\Domain\Carrier\ValueObject\OutOfRangeBehavior;
+use PrestaShop\PrestaShop\Core\FeatureFlag\FeatureFlagSettings;
+use PrestaShop\PrestaShop\Core\FeatureFlag\FeatureFlagStateCheckerInterface;
 
 class CarrierCore extends ObjectModel
 {
@@ -36,6 +20,7 @@ class CarrierCore extends ObjectModel
     public const PS_CARRIERS_AND_CARRIER_MODULES_NEED_RANGE = 4;
     public const ALL_CARRIERS = 5;
 
+    // Shipping methods
     public const SHIPPING_METHOD_DEFAULT = 0;
     public const SHIPPING_METHOD_WEIGHT = 1;
     public const SHIPPING_METHOD_PRICE = 2;
@@ -51,19 +36,26 @@ class CarrierCore extends ObjectModel
     public const SORT_BY_ASC = 0;
     public const SORT_BY_DESC = 1;
 
-    /** @var int common id for carrier historization */
+    /**
+     * @var int This is a persistent ID of the carrier, used to identify the carrier in the database.
+     *          It remains the same during carrier updates, so it's a very good identifer to use
+     *          in modules.
+     */
     public $id_reference;
 
     /** @var string Name */
     public $name;
 
-    /** @var string URL with a '@' for */
+    /**
+     * @var string Tracking URL for this carrier. Use @ as a variable placeholder that will be filled in
+     *             with the tracking number of the order
+     */
     public $url;
 
     /** @var string[]|string Delay needed to deliver customer */
     public $delay;
 
-    /** @var bool Carrier statuts */
+    /** @var bool Carrier status */
     public $active = true;
 
     /** @var bool True if carrier has been deleted (staying in database as deleted) */
@@ -72,11 +64,26 @@ class CarrierCore extends ObjectModel
     /** @var bool True if extra shipping handling cost should be applied to this Carrier */
     public $shipping_handling = true;
 
-    /** @var bool Behavior for out-of-range weights: true to disable carrier, false to apply the cost of the highest defined range */
+    /**
+     * @var bool Behavior if the carrier is not within configured ranges.
+     *           If set to true, carrier will be disabled.
+     *           If false, the most expensive range will be used.
+     *           Watch out - this value is passed around as an integer in the new part of the core.
+     */
     public $range_behavior;
 
-    /** @var bool Carrier module */
+    /**
+     * @var bool True if the carrier is related to an external module. This needs to go hand-in-hand
+     *           with the `external_module_name` property below, which contains the name of the module.
+     *           Fill these two values programatically during configuration of the carrier by the module.
+     */
     public $is_module;
+
+    /** @var string Name of external module responsible for this Carrier, if filled in by a module, make sure
+     *              that the `is_module` property is set to true.
+     *              Fill these two values programatically during configuration of the carrier by the module.
+     */
+    public $external_module_name = null;
 
     /** @var bool Free carrier */
     public $is_free = false;
@@ -85,14 +92,13 @@ class CarrierCore extends ObjectModel
     public $shipping_method = 0;
 
     /**
-     * @var bool True if external module calculates shipping cost
+     * @var bool If true, an external module, if defined, will be asked to provide the shipping cost,
+     *           otherwise the shipping cost will be calculated by the core.
+     *           Fill this value programatically during configuration of the carrier by the module.
      *
      * @see Cart::getPackageShippingCostFromModule()
      */
     public $shipping_external = false;
-
-    /** @var string Name of external module responsible for this Carrier */
-    public $external_module_name = null;
 
     /**
      * @var bool True if module needs core range-based shipping cost to calculate final cost
@@ -217,7 +223,7 @@ class CarrierCore extends ObjectModel
     public function add($autoDate = true, $nullValues = false)
     {
         if ($this->position <= 0) {
-            $this->position = Carrier::getHigherPosition() + 1;
+            $this->position = Carrier::getHighestPosition() + 1;
         }
         if (!parent::add($autoDate, $nullValues) || !Validate::isLoadedObject($this)) {
             return false;
@@ -280,7 +286,7 @@ class CarrierCore extends ObjectModel
     }
 
     /**
-     * Get delivery price for a given order.
+     * Get delivery price for a given weight and zone
      *
      * @param float $total_weight Total order weight
      * @param int $id_zone Zone ID (for customer delivery address)
@@ -616,37 +622,43 @@ class CarrierCore extends ObjectModel
      */
     public static function getDeliveredCountries(int $id_lang, bool $active_countries = false, bool $active_carriers = false, $contain_states = null)
     {
-        $states = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS('
-            SELECT s.*
-            FROM `' . _DB_PREFIX_ . 'state` s
-            ORDER BY s.`name` ASC');
+        $result = [];
 
-        $result = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS('
-            SELECT cl.*,c.*, cl.`name` AS country, zz.`name` AS zone
+        $countries = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS(
+            'SELECT cl.*, c.*, cl.`name` AS country, zz.`name` AS zone
             FROM `' . _DB_PREFIX_ . 'country` c' .
             Shop::addSqlAssociation('country', 'c') . '
-            LEFT JOIN `' . _DB_PREFIX_ . 'country_lang` cl ON (c.`id_country` = cl.`id_country` AND cl.`id_lang` = ' . (int) $id_lang . ')
-            INNER JOIN (`' . _DB_PREFIX_ . 'carrier_zone` cz INNER JOIN `' . _DB_PREFIX_ . 'carrier` cr ON ( cr.id_carrier = cz.id_carrier AND cr.deleted = 0 ' .
-            ($active_carriers ? 'AND cr.active = 1) ' : ') ') . '
-            LEFT JOIN `' . _DB_PREFIX_ . 'zone` zz ON cz.id_zone = zz.id_zone) ON zz.`id_zone` = c.`id_zone`
+            LEFT JOIN `' . _DB_PREFIX_ . 'country_lang` cl ON c.`id_country` = cl.`id_country` AND cl.`id_lang` = ' . (int) $id_lang . '
+            INNER JOIN `' . _DB_PREFIX_ . 'carrier_zone` cz ON cz.id_zone = c.id_zone
+            LEFT JOIN `' . _DB_PREFIX_ . 'zone` zz ON zz.id_zone = c.id_zone
+            INNER JOIN `' . _DB_PREFIX_ . 'carrier` cr ON cr.id_carrier = cz.id_carrier ' . ($active_carriers ? 'AND cr.active = 1 ' : '') . ' AND cr.deleted = 0
+            INNER JOIN `' . _DB_PREFIX_ . 'carrier_shop` cs ON cr.id_carrier = cs.id_carrier AND cs.id_shop = ' . (int) Shop::getContextShopID() . '
             WHERE 1
             ' . ($active_countries ? 'AND c.active = 1' : '') . '
             ' . (null !== $contain_states ? 'AND c.`contains_states` = ' . (int) $contain_states : '') . '
-            ORDER BY cl.name ASC');
-
-        $countries = [];
-        foreach ($result as $country) {
-            $countries[$country['id_country']] = $country;
+            GROUP BY c.`id_country`
+            ORDER BY cl.name ASC'
+        );
+        foreach ($countries as $country) {
+            $result[$country['id_country']] = $country;
         }
+        if (empty($result)) {
+            return $result;
+        }
+
+        // Fetch active states linked to delivered countries
+        $states = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS('
+            SELECT s.*
+            FROM `' . _DB_PREFIX_ . 'state` s
+            WHERE s.id_country IN (' . implode(',', array_keys($countries)) . ')
+              AND s.active = 1
+            ORDER BY s.`name` ASC'
+        );
         foreach ($states as $state) {
-            if (isset($countries[$state['id_country']])) { /* Does not keep the state if its country has been disabled and not selected */
-                if ($state['active'] == 1) {
-                    $countries[$state['id_country']]['states'][] = $state;
-                }
-            }
+            $result[$state['id_country']]['states'][] = $state;
         }
 
-        return $countries;
+        return $result;
     }
 
     /**
@@ -680,7 +692,7 @@ class CarrierCore extends ObjectModel
     }
 
     /**
-     * Get available Carriers for Order.
+     * Get available Carriers for given order (cart)
      *
      * @param int $id_zone Zone ID
      * @param array|null $groups Group of the Customer
@@ -691,6 +703,7 @@ class CarrierCore extends ObjectModel
      */
     public static function getCarriersForOrder($id_zone, $groups = null, $cart = null, &$error = [])
     {
+        // First, initialize the context, language, currency
         $context = Context::getContext();
         $id_lang = $context->language->id;
         if (null === $cart) {
@@ -704,6 +717,8 @@ class CarrierCore extends ObjectModel
         if (!is_array($groups) || empty($groups)) {
             $groups = [Configuration::get('PS_UNIDENTIFIED_GROUP')];
         }
+
+        // And get all carriers available in the system
         $result = Carrier::getCarriers($id_lang, true, false, (int) $id_zone, $groups, self::PS_CARRIERS_AND_CARRIER_MODULES_NEED_RANGE);
         $results_array = [];
 
@@ -711,7 +726,12 @@ class CarrierCore extends ObjectModel
             $carrier = new Carrier((int) $row['id_carrier']);
             $shipping_method = $carrier->getShippingMethod();
             if ($shipping_method != Carrier::SHIPPING_METHOD_FREE) {
-                // Get only carriers that are compliant with shipping method
+                /*
+                 * First, we check loosely if the carrier is available for the zone with at least one range.
+                 * No weight, no price, just check if the carrier has any ranges for the zone.
+                 * If not, we remove it from the list immediately.
+                 * If yes, we must still check the behavior of the carrier for out-of-range prices below.
+                 */
                 if ($shipping_method == Carrier::SHIPPING_METHOD_WEIGHT && $carrier->getMaxDeliveryPriceByWeight($id_zone) === false) {
                     $error[$carrier->id] = Carrier::SHIPPING_WEIGHT_EXCEPTION;
                     unset($result[$k]);
@@ -725,11 +745,17 @@ class CarrierCore extends ObjectModel
                     continue;
                 }
 
-                // If out-of-range behavior carrier is set to "Deactivate carrier"
-                if ($row['range_behavior']) {
-                    // Get id zone
+                /*
+                 * Second, if out-of-range behavior carrier is set to "Deactivate carrier", we have to specifically check
+                 * for current weight/price of the cart and remove the carrier if it is not available for the current cart.
+                 */
+                if ($row['range_behavior'] == OutOfRangeBehavior::DISABLED) {
+                    /*
+                     * Resolve default zone to use for shipping if no address is provided yet. Country in the context is
+                     * always assigned. It may be a default country or a geolocated country set it FrontController.
+                     */
                     if (!$id_zone) {
-                        $id_zone = (int) Country::getIdZone((int) Configuration::get('PS_COUNTRY_DEFAULT'));
+                        $id_zone = (int) Context::getContext()->country->id_zone;
                     }
 
                     // Get only carriers that have a range compatible with cart
@@ -751,9 +777,9 @@ class CarrierCore extends ObjectModel
                 }
             }
 
+            // Calculate the price of the carrier
             $row['price'] = (($shipping_method == Carrier::SHIPPING_METHOD_FREE) ? 0 : $cart->getPackageShippingCost((int) $row['id_carrier'], true, null, null, $id_zone));
             $row['price_tax_exc'] = (($shipping_method == Carrier::SHIPPING_METHOD_FREE) ? 0 : $cart->getPackageShippingCost((int) $row['id_carrier'], false, null, null, $id_zone));
-            $row['img'] = file_exists(_PS_SHIP_IMG_DIR_ . (int) $row['id_carrier'] . '.jpg') ? _THEME_SHIP_DIR_ . (int) $row['id_carrier'] . '.jpg' : '';
 
             // If price is false, then the carrier is unavailable (carrier module)
             if ($row['price'] === false) {
@@ -761,10 +787,14 @@ class CarrierCore extends ObjectModel
 
                 continue;
             }
+
+            // Locate an image (original resolution, we should probably move to use a presenter and thumbnails here)
+            $row['img'] = file_exists(_PS_SHIP_IMG_DIR_ . (int) $row['id_carrier'] . '.jpg') ? _THEME_SHIP_DIR_ . (int) $row['id_carrier'] . '.jpg' : '';
+
             $results_array[] = $row;
         }
 
-        // if we have to sort carriers by price
+        // Sort carriers by price if needed
         $prices = [];
         if (Configuration::get('PS_CARRIER_DEFAULT_SORT') == Carrier::SORT_BY_PRICE) {
             foreach ($results_array as $r) {
@@ -1100,10 +1130,24 @@ class CarrierCore extends ObjectModel
      */
     public function isUsed()
     {
+        $containerFinder = new ContainerFinder(Context::getContext());
+
+        /** @var FeatureFlagStateCheckerInterface $featureFlagManager */
+        $featureFlagManager = $containerFinder->getContainer()->get(FeatureFlagStateCheckerInterface::class);
+
         $row = Db::getInstance()->getRow('
             SELECT COUNT(`id_carrier`) AS total
             FROM `' . _DB_PREFIX_ . 'orders`
             WHERE `id_carrier` = ' . (int) $this->id);
+
+        if ($featureFlagManager->isEnabled(FeatureFlagSettings::FEATURE_FLAG_IMPROVED_SHIPMENT)) {
+            $result = Db::getInstance()->getRow('
+                SELECT COUNT(`id_carrier`) AS total
+                FROM `' . _DB_PREFIX_ . 'shipment`
+                WHERE `id_carrier` = ' . (int) $this->id);
+
+            $row['total'] += (int) $result['total'];
+        }
 
         return (int) $row['total'];
     }
@@ -1301,6 +1345,11 @@ class CarrierCore extends ObjectModel
      */
     public function getTaxesRate(?Address $address = null)
     {
+        /*
+         * If no address is provided, we let Address::initialize instantiate one blank
+         * for us with the all default/fallback data we can get. We get a blank Address
+         * object with a country, sometimes even state and postcode.
+         */
         if (!$address || !$address->id_country) {
             $address = Address::initialize();
         }
@@ -1436,15 +1485,34 @@ class CarrierCore extends ObjectModel
      * Gets the highest carrier position.
      *
      * @return int $position
+     *
+     * @deprecated Since 9.2, use Carrier::getHighestPosition() instead.
      */
     public static function getHigherPosition()
+    {
+        @trigger_error(
+            sprintf(
+                '%s is deprecated since version 9.2. Use %s instead.',
+                __METHOD__,
+                self::class . '::getHighestPosition()'
+            ),
+            E_USER_DEPRECATED
+        );
+
+        return self::getHighestPosition();
+    }
+
+    /**
+     * Gets the highest carrier position.
+     */
+    public static function getHighestPosition(): int
     {
         $sql = 'SELECT MAX(`position`)
                 FROM `' . _DB_PREFIX_ . 'carrier`
                 WHERE `deleted` = 0';
         $position = Db::getInstance()->getValue($sql);
 
-        return (is_numeric($position)) ? $position : -1;
+        return (is_numeric($position)) ? (int) $position : -1;
     }
 
     /**
@@ -1463,12 +1531,6 @@ class CarrierCore extends ObjectModel
      */
     public static function getAvailableCarrierList(Product $product, $id_warehouse = 0, $id_address_delivery = null, $id_shop = null, $cart = null, &$error = [])
     {
-        static $ps_country_default = null;
-
-        if ($ps_country_default === null) {
-            $ps_country_default = Configuration::get('PS_COUNTRY_DEFAULT');
-        }
-
         if (null === $id_shop) {
             $id_shop = Context::getContext()->shop->id;
         }
@@ -1489,8 +1551,7 @@ class CarrierCore extends ObjectModel
                 return [];
             }
         } else {
-            $country = new Country($ps_country_default);
-            $id_zone = $country->id_zone;
+            $id_zone = (int) Context::getContext()->country->id_zone;
         }
 
         // Does the product is linked with carriers?

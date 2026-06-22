@@ -1,42 +1,29 @@
 <?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 declare(strict_types=1);
 
 namespace Tests\Integration\Behaviour\Features\Context\Domain;
 
 use Behat\Gherkin\Node\TableNode;
-use Country;
 use PHPUnit\Framework\Assert;
 use PrestaShop\PrestaShop\Core\Domain\Country\Command\AddCountryCommand;
+use PrestaShop\PrestaShop\Core\Domain\Country\Command\BulkToggleCountriesStatusCommand;
+use PrestaShop\PrestaShop\Core\Domain\Country\Command\BulkUpdateCountryZoneCommand;
 use PrestaShop\PrestaShop\Core\Domain\Country\Command\DeleteCountryCommand;
 use PrestaShop\PrestaShop\Core\Domain\Country\Command\EditCountryCommand;
+use PrestaShop\PrestaShop\Core\Domain\Country\Command\ToggleCountryStatusCommand;
+use PrestaShop\PrestaShop\Core\Domain\Country\Exception\BulkCountryException;
+use PrestaShop\PrestaShop\Core\Domain\Country\Exception\CountryConstraintException;
 use PrestaShop\PrestaShop\Core\Domain\Country\Exception\CountryException;
 use PrestaShop\PrestaShop\Core\Domain\Country\Exception\CountryNotFoundException;
+use PrestaShop\PrestaShop\Core\Domain\Country\Exception\DuplicateCountryIsoCodeException;
+use PrestaShop\PrestaShop\Core\Domain\Country\Exception\InvalidAddressFormatException;
 use PrestaShop\PrestaShop\Core\Domain\Country\Query\GetCountryForEditing;
 use PrestaShop\PrestaShop\Core\Domain\Country\QueryResult\CountryForEditing;
+use PrestaShop\PrestaShop\Core\Domain\Zone\Exception\ZoneNotFoundException;
 use RuntimeException;
 use Tests\Integration\Behaviour\Features\Context\SharedStorage;
 use Tests\Integration\Behaviour\Features\Context\Util\NoExceptionAlthoughExpectedException;
@@ -64,11 +51,45 @@ class CountryFeatureContext extends AbstractDomainFeatureContext
     }
 
     /**
+     * @Given country :reference has invalid id
+     */
+    public function setInvalidCountryReference(string $reference): void
+    {
+        $this->getSharedStorage()->set($reference, 0);
+    }
+
+    /**
      * @Then I should get error that country was not found
      */
     public function assertCountryNotFound(): void
     {
         $this->assertLastErrorIs(CountryNotFoundException::class);
+    }
+
+    /**
+     * @Then I should get error that country id is invalid
+     */
+    public function assertCountryIdIsInvalid(): void
+    {
+        $this->assertLastErrorIs(CountryConstraintException::class, CountryConstraintException::INVALID_ID);
+    }
+
+    /**
+     * @Then I should get error that zone was not found
+     */
+    public function assertZoneNotFound(): void
+    {
+        $this->assertLastErrorIs(ZoneNotFoundException::class);
+    }
+
+    /**
+     * @Then I should get a bulk country exception containing :expectedErrorsCount errors
+     */
+    public function assertBulkCountryExceptionContainingErrors(int $expectedErrorsCount): void
+    {
+        /** @var BulkCountryException $lastError */
+        $lastError = $this->assertLastErrorIs(BulkCountryException::class);
+        Assert::assertCount($expectedErrorsCount, $lastError->getExceptions());
     }
 
     /**
@@ -90,7 +111,7 @@ class CountryFeatureContext extends AbstractDomainFeatureContext
                 (int) $data['zone'],
                 PrimitiveUtils::castStringBooleanIntoBoolean($data['need_zip_code']),
                 $data['zip_code_format'],
-                (string) $data['address_format'],
+                $this->unescapeFormat((string) $data['address_format']),
                 PrimitiveUtils::castStringBooleanIntoBoolean($data['is_enabled']),
                 PrimitiveUtils::castStringBooleanIntoBoolean($data['contains_states']),
                 PrimitiveUtils::castStringBooleanIntoBoolean($data['need_identification_number']),
@@ -144,7 +165,7 @@ class CountryFeatureContext extends AbstractDomainFeatureContext
         }
 
         if (isset($data['address_format'])) {
-            $command->setAddressFormat($data['address_format']);
+            $command->setAddressFormat($this->unescapeFormat($data['address_format']));
         }
 
         if (isset($data['is_enabled'])) {
@@ -163,13 +184,153 @@ class CountryFeatureContext extends AbstractDomainFeatureContext
             $command->setDisplayTaxLabel(PrimitiveUtils::castStringBooleanIntoBoolean($data['display_tax_label']));
         }
 
-        $this->getCommandBus()->handle($command);
+        try {
+            $this->getCommandBus()->handle($command);
+        } catch (CountryException $e) {
+            $this->setLastException($e);
+        }
+    }
+
+    /**
+     * @Then I should get an :exceptionShortName error
+     */
+    public function assertCountryDomainError(string $exceptionShortName): void
+    {
+        $map = [
+            'InvalidAddressFormat' => InvalidAddressFormatException::class,
+            'DuplicateCountryIsoCode' => DuplicateCountryIsoCodeException::class,
+        ];
+
+        if (!isset($map[$exceptionShortName])) {
+            throw new RuntimeException(sprintf('Unknown country error short name "%s"', $exceptionShortName));
+        }
+
+        $this->assertLastErrorIs($map[$exceptionShortName]);
+    }
+
+    /**
+     * Behat tables strip backslash escapes in cell values, so the feature file uses
+     * the literal `\n` two-character sequence instead of a newline. Convert back here.
+     */
+    private function unescapeFormat(string $format): string
+    {
+        return str_replace('\\n', "\n", $format);
+    }
+
+    /**
+     * @When I toggle country status :countryReference
+     */
+    public function toggleCountryStatus(string $countryReference): void
+    {
+        try {
+            $this->getCommandBus()->handle(new ToggleCountryStatusCommand($this->referenceToId($countryReference)));
+        } catch (CountryException $e) {
+            $this->setLastException($e);
+        }
+    }
+
+    /**
+     * @When I bulk enable countries :countryReferences
+     */
+    public function bulkEnableCountries(string $countryReferences): void
+    {
+        $this->bulkToggleCountriesStatus($countryReferences, true);
+    }
+
+    /**
+     * @When I bulk disable countries :countryReferences
+     */
+    public function bulkDisableCountries(string $countryReferences): void
+    {
+        $this->bulkToggleCountriesStatus($countryReferences, false);
+    }
+
+    /**
+     * @When I bulk enable an empty list of countries
+     */
+    public function bulkEnableEmptyCountriesList(): void
+    {
+        try {
+            $this->getCommandBus()->handle(new BulkToggleCountriesStatusCommand(true, []));
+        } catch (CountryException $e) {
+            $this->setLastException($e);
+        }
+    }
+
+    /**
+     * @When I bulk update an empty list of countries to zone :zoneId
+     */
+    public function bulkUpdateEmptyCountriesListZone(int $zoneId): void
+    {
+        try {
+            $this->getCommandBus()->handle(new BulkUpdateCountryZoneCommand([], $zoneId));
+        } catch (CountryException $e) {
+            $this->setLastException($e);
+        }
+    }
+
+    /**
+     * @Then no exception should have been thrown
+     */
+    public function assertNoExceptionWasThrown(): void
+    {
+        $this->assertLastErrorIsNull();
+    }
+
+    /**
+     * @Then I should get error that country list is empty
+     */
+    public function assertCountryListIsEmpty(): void
+    {
+        $this->assertLastErrorIs(CountryException::class);
+    }
+
+    /**
+     * @When I bulk update countries :countryReferences to zone :zoneId
+     */
+    public function bulkUpdateCountriesZone(string $countryReferences, int $zoneId): void
+    {
+        try {
+            $this->getCommandBus()->handle(new BulkUpdateCountryZoneCommand(
+                $this->getCountryIdsFromReferences($countryReferences),
+                $zoneId
+            ));
+        } catch (CountryException|ZoneNotFoundException $e) {
+            $this->setLastException($e);
+        }
+    }
+
+    /**
+     * @Then country :countryReference should be enabled
+     */
+    public function assertCountryIsEnabled(string $countryReference): void
+    {
+        $country = $this->getQueryBus()->handle(new GetCountryForEditing($this->referenceToId($countryReference)));
+        Assert::assertTrue($country->isEnabled());
+    }
+
+    /**
+     * @Then country :countryReference should be disabled
+     */
+    public function assertCountryIsDisabled(string $countryReference): void
+    {
+        $country = $this->getQueryBus()->handle(new GetCountryForEditing($this->referenceToId($countryReference)));
+        Assert::assertFalse($country->isEnabled());
+    }
+
+    /**
+     * @Then country :countryReference should be assigned to zone :zoneId
+     */
+    public function assertCountryZone(string $countryReference, int $zoneId): void
+    {
+        $country = $this->getQueryBus()->handle(new GetCountryForEditing($this->referenceToId($countryReference)));
+        Assert::assertSame($zoneId, $country->getZone());
     }
 
     /**
      * @Then /^the country "(.+)" should have the following properties:$/
      */
-    public function assertQueryCustomerProperties($countryReference, TableNode $table)
+    public function assertCountryProperties(string $countryReference, TableNode $table)
     {
         $countryId = SharedStorage::getStorage()->get($countryReference);
         $expectedData = $this->localizeByRows($table);
@@ -179,18 +340,25 @@ class CountryFeatureContext extends AbstractDomainFeatureContext
         /** @var CountryForEditing $result */
         $result = $queryBus->handle(new GetCountryForEditing($countryId));
 
-        Assert::assertEquals($expectedData['localizedNames'], $result->getLocalizedNames());
-        Assert::assertEquals($expectedData['isoCode'], $result->getIsoCode());
-        Assert::assertEquals($expectedData['callPrefix'], $result->getCallPrefix());
-        Assert::assertEquals($expectedData['defaultCurrency'], $result->getDefaultCurrency());
-        Assert::assertEquals($expectedData['zone'], $result->getZone());
-        Assert::assertEquals($expectedData['needZipCode'], $result->isNeedZipCode());
-        Assert::assertEquals($expectedData['zipCodeFormat'], $result->getZipCodeFormat()->getValue());
-        Assert::assertEquals($expectedData['enabled'], $result->isEnabled());
-        Assert::assertEquals($expectedData['containsStates'], $result->isContainsStates());
-        Assert::assertEquals($expectedData['needIdNumber'], $result->isNeedIdNumber());
-        Assert::assertEquals($expectedData['displayTaxLabel'], $result->isDisplayTaxLabel());
-        Assert::assertEquals([$expectedData['shopAssociation']], $result->getShopAssociation());
+        Assert::assertEquals($expectedData['name'], $result->getLocalizedNames(), 'unexpected name');
+        Assert::assertEquals($expectedData['iso_code'], $result->getIsoCode(), 'unexpected iso_code');
+        Assert::assertEquals($expectedData['call_prefix'], $result->getCallPrefix(), 'unexpected call_prefix');
+        Assert::assertEquals($expectedData['default_currency'], $result->getDefaultCurrency(), 'unexpected default_currency');
+        Assert::assertEquals($expectedData['zone'], $result->getZone(), 'unexpected zone');
+        Assert::assertEquals(PrimitiveUtils::castStringBooleanIntoBoolean($expectedData['need_zip_code']), $result->isNeedZipCode(), 'unexpected need_zip_code');
+        Assert::assertEquals($expectedData['zip_code_format'], $result->getZipCodeFormat()->getValue(), 'unexpected zip_code_format');
+        Assert::assertEquals(PrimitiveUtils::castStringBooleanIntoBoolean($expectedData['is_enabled']), $result->isEnabled(), 'unexpected enabled');
+        Assert::assertEquals(PrimitiveUtils::castStringBooleanIntoBoolean($expectedData['contains_states']), $result->isContainsStates(), 'unexpected contains_states');
+        Assert::assertEquals(PrimitiveUtils::castStringBooleanIntoBoolean($expectedData['need_identification_number']), $result->isNeedIdNumber(), 'unexpected need_identification_number');
+        Assert::assertEquals(PrimitiveUtils::castStringBooleanIntoBoolean($expectedData['display_tax_label']), $result->isDisplayTaxLabel(), 'unexpected display_tax_label');
+        Assert::assertEquals([$expectedData['shop_association']], $result->getShopAssociation(), 'unexpected shop_association');
+        if (array_key_exists('address_format', $expectedData)) {
+            Assert::assertEquals(
+                $this->unescapeFormat((string) $expectedData['address_format']),
+                $result->getAddressFormat(),
+                'unexpected address_format'
+            );
+        }
     }
 
     private function formatCountryDataIfNeeded(array $data)
@@ -251,5 +419,29 @@ class CountryFeatureContext extends AbstractDomainFeatureContext
         } catch (CountryNotFoundException $e) {
             SharedStorage::getStorage()->clear($countryReference);
         }
+    }
+
+    private function bulkToggleCountriesStatus(string $countryReferences, bool $expectedStatus): void
+    {
+        try {
+            $this->getCommandBus()->handle(new BulkToggleCountriesStatusCommand(
+                $expectedStatus,
+                $this->getCountryIdsFromReferences($countryReferences)
+            ));
+        } catch (CountryException $e) {
+            $this->setLastException($e);
+        }
+    }
+
+    /**
+     * @return int[]
+     */
+    private function getCountryIdsFromReferences(string $countryReferences): array
+    {
+        $references = array_map('trim', explode(',', $countryReferences));
+
+        return array_map(function (string $reference): int {
+            return $this->referenceToId($reference);
+        }, $references);
     }
 }

@@ -31,6 +31,11 @@ services:
     autowire: true
     tags:
       - { name: 'serializer.normalizer', priority: 10 }
+  # DateImmutableNormalizer needs a higher priority than DateTimeImmutableNormalizer, or DateImmutable are normalized by DateTimeImmutableNormalizer
+  PrestaShopBundle\ApiPlatform\Normalizer\DateImmutableNormalizer:
+    autowire: true
+    tags:
+      - { name: 'serializer.normalizer', priority: 20 }
 
   PrestaShopBundle\ApiPlatform\NormalizationMapper:
     autowire: true
@@ -57,12 +62,20 @@ services:
     autowire: true
   PrestaShopBundle\ApiPlatform\LocalizedValueUpdater:
     autowire: true
+  PrestaShopBundle\ApiPlatform\PositionCollectionUpdater:
+    autowire: true
 
   # This is a custom validator for CQRS commands
   PrestaShopBundle\ApiPlatform\Validator\CQRSApiValidator:
     autowire: true
     arguments:
       $validatorMetadataFactory: '@validator.mapping.class_metadata_factory'
+
+
+  # Decorator of api_platform.state_provider.deserialize DeserializeProvider
+  PrestaShopBundle\ApiPlatform\Provider\EmptyBodyDeserializerProvider:
+    autowire: true
+    public: false
 
   # Customer provider for CQRS queries
   PrestaShopBundle\ApiPlatform\Provider\QueryProvider:
@@ -77,6 +90,11 @@ services:
     autowire: true
     arguments:
       - '@prestashop.core.command_bus'
+
+  # Custom processor for position update
+  PrestaShopBundle\ApiPlatform\Processor\UpdatePositionProcessor:
+    tags: [ 'api_platform.state_processor' ]
+    autowire: true
 
   # Custom provider for paginated listing
   PrestaShopBundle\ApiPlatform\Provider\QueryListProvider:

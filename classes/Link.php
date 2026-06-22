@@ -1,27 +1,7 @@
 <?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 use PrestaShop\PrestaShop\Adapter\SymfonyContainer;
 use PrestaShop\PrestaShop\Core\Exception\CoreException;
@@ -45,6 +25,7 @@ class LinkCore
     protected $ssl_enable;
     protected $urlShopId = null;
 
+    // Categories that will not be used for URL rewriting
     protected static $category_disable_rewrite = null;
 
     /**
@@ -67,6 +48,7 @@ class LinkCore
             define('_PS_BASE_URL_SSL_', Tools::getShopDomainSsl(true));
         }
 
+        // Define categories that will not be used for URL rewriting
         if (Link::$category_disable_rewrite === null) {
             Link::$category_disable_rewrite = [
                 Configuration::get('PS_HOME_CATEGORY'),
@@ -175,6 +157,20 @@ class LinkCore
             $params['id'] = $product->id;
         }
 
+        // Preserve preview parameters if they exist in the current request and we're generating a link for the same product
+        if (isset($_GET['preview']) && $_GET['preview'] == '1' && !isset($extraParams['preview'])) {
+            $currentProductId = isset($_GET['id_product']) ? (int) $_GET['id_product'] : null;
+            if ($currentProductId && $currentProductId === (int) $params['id']) {
+                if (isset($_GET['adtoken'])) {
+                    $extraParams['adtoken'] = $_GET['adtoken'];
+                }
+                if (isset($_GET['id_employee'])) {
+                    $extraParams['id_employee'] = $_GET['id_employee'];
+                }
+                $extraParams['preview'] = '1';
+            }
+        }
+
         // Attribute equal to 0 or empty is useless, so we force it to null so that it won't be inserted in query parameters
         if (empty($idProductAttribute)) {
             $idProductAttribute = null;
@@ -184,10 +180,13 @@ class LinkCore
             $product = $this->getProductObject($product, $idLang, $idShop);
         }
         $params['rewrite'] = (!$alias) ? $product->getFieldByLang('link_rewrite') : $alias;
-        if (!$ean13) {
-            $product = $this->getProductObject($product, $idLang, $idShop);
+
+        if ($dispatcher->hasKeyword('product_rule', $idLang, 'ean13', $idShop)) {
+            if (!$ean13) {
+                $product = $this->getProductObject($product, $idLang, $idShop);
+            }
+            $params['ean13'] = (!$ean13) ? $product->ean13 : $ean13;
         }
-        $params['ean13'] = (!$ean13) ? $product->ean13 : $ean13;
         if ($dispatcher->hasKeyword('product_rule', $idLang, 'meta_title', $idShop)) {
             $product = $this->getProductObject($product, $idLang, $idShop);
             $params['meta_title'] = Tools::str2url($product->getFieldByLang('meta_title'));
@@ -229,9 +228,12 @@ class LinkCore
             $product = $this->getProductObject($product, $idLang, $idShop);
             $params['category'] = (!$category) ? $product->category : $category;
             $cats = [];
+            /*
+             * We will use all categories in the path of the default category,
+             * with two exceptions - the root category and the home category.
+             */
             foreach ($product->getParentCategories($idLang) as $cat) {
                 if (!in_array($cat['id_category'], Link::$category_disable_rewrite)) {
-                    // remove root and home category from the URL
                     $cats[] = $cat['link_rewrite'];
                 }
             }
@@ -1232,6 +1234,48 @@ class LinkCore
     }
 
     /**
+     * Create a link to an Attachmnt download.
+     *
+     * @param Attachment|int $attachment Attachment object
+     * @param string|null $alias
+     * @param bool|null $ssl
+     * @param int|null $idLang
+     * @param int|null $idShop
+     * @param bool $relativeProtocol
+     *
+     * @return string
+     */
+    public function getAttachmentLink(
+        $attachment,
+        $alias = null,
+        $ssl = null,
+        $idLang = null,
+        $idShop = null,
+        $relativeProtocol = false
+    ) {
+        if (!$idLang) {
+            $idLang = Context::getContext()->language->id;
+        }
+
+        $url = $this->getBaseLink($idShop, $ssl, $relativeProtocol) . $this->getLangLink($idLang, null, $idShop);
+
+        $dispatcher = Dispatcher::getInstance();
+        if (!is_object($attachment)) {
+            if ($alias !== null && !$dispatcher->hasKeyword('attachment_rule', $idLang, 'meta_title', $idShop)) {
+                return $url . $dispatcher->createUrl('attachment_rule', $idLang, ['id' => (int) $attachment, 'rewrite' => (string) $alias], $this->allow, '', $idShop);
+            }
+            $attachment = new Attachment($attachment, $idLang);
+        }
+
+        // Set available keywords
+        $params = [];
+        $params['id'] = $attachment->id;
+        $params['rewrite'] = Tools::str2url((!$alias) ? (is_array($attachment->file_name) ? $attachment->file_name[(int) $idLang] : $attachment->file_name) : $alias);
+
+        return $url . $dispatcher->createUrl('attachment_rule', $idLang, $params, $this->allow, '', $idShop);
+    }
+
+    /**
      * @param string $url
      * @param int $p
      *
@@ -1437,6 +1481,7 @@ class LinkCore
         }
 
         $url = preg_replace($patterns, '', $url);
+        $url = (string) preg_replace('/&{2,}/', '&', $url);
         $url = trim($url, '?&/');
 
         return 'index.php' . (!empty($legacyEnvironment) ? '?' : '/') . $url;
@@ -1587,6 +1632,18 @@ class LinkCore
                     $params['name'],
                     $params['controller'],
                     $params['params'],
+                    $params['ssl'],
+                    $params['id_lang'],
+                    $params['id_shop'],
+                    $params['relative_protocol']
+                );
+
+                break;
+
+            case 'attachment':
+                $link = $context->link->getAttachmentLink(
+                    new Attachment(isset($params['id']) ? $params['id'] : $params['params']['id_attachment'], $params['id_lang']),
+                    $params['alias'],
                     $params['ssl'],
                     $params['id_lang'],
                     $params['id_shop'],

@@ -1,27 +1,7 @@
 <?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 
 namespace PrestaShop\PrestaShop\Adapter\Discount\Update;
@@ -29,13 +9,17 @@ namespace PrestaShop\PrestaShop\Adapter\Discount\Update;
 use CartRule;
 use Doctrine\DBAL\Connection;
 use PrestaShop\PrestaShop\Adapter\Discount\Repository\DiscountRepository;
+use PrestaShop\PrestaShop\Adapter\Discount\Trait\ProductConditionsTrait;
+use PrestaShop\PrestaShop\Core\Domain\Discount\DiscountSettings;
 use PrestaShop\PrestaShop\Core\Domain\Discount\Exception\CannotUpdateDiscountException;
 use PrestaShop\PrestaShop\Core\Domain\Discount\ProductRuleGroup;
 use PrestaShop\PrestaShop\Core\Domain\Discount\ValueObject\DiscountId;
-use PrestaShop\PrestaShop\Core\Domain\ValueObject\Money;
+use PrestaShop\PrestaShop\Core\Domain\Discount\ValueObject\DiscountType;
 
 class DiscountConditionsUpdater
 {
+    use ProductConditionsTrait;
+
     public function __construct(
         private readonly DiscountRepository $discountRepository,
         private readonly Connection $connection,
@@ -43,55 +27,54 @@ class DiscountConditionsUpdater
     ) {
     }
 
+    /**
+     * For all provided fields, if the value is null, no modification is done and the fields remain untouched
+     * (partial update), for the list of IDs if an empty array is provided the existing associations are removed
+     * and no new association is created, so empty array is used to remove all existing associations.
+     *
+     * @param DiscountId $discountId
+     * @param ProductRuleGroup[]|null $productConditions
+     * @param int[]|null $carrierIds
+     * @param int[]|null $countryIds
+     * @param int[]|null $customerGroupIds
+     *
+     * @return void
+     */
     public function update(
         DiscountId $discountId,
-        ?int $minimumProductsQuantity = null,
         ?array $productConditions = null,
-        ?Money $minimumAmount = null,
-        ?bool $minimumShippingIncluded = null,
+        ?array $carrierIds = null,
+        ?array $countryIds = null,
+        ?array $customerGroupIds = null,
     ): void {
-        // todo: when other conditions are added we check that only one is provided
+        // Nothing to modify we return immediately
+        if ($productConditions === null
+            && $carrierIds === null
+            && $countryIds === null
+            && $customerGroupIds === null) {
+            return;
+        }
+
         $discount = $this->discountRepository->get($discountId);
-        $updatableProperties = $this->cleanAllConditions($discount);
-        if (null !== $minimumProductsQuantity) {
-            $updatableProperties = array_merge($updatableProperties, $this->updateMinimalProductQuantity($discount, $minimumProductsQuantity));
-        }
-
-        if (null !== $minimumAmount) {
-            $updatableProperties = array_merge($updatableProperties, $this->updateMinimalAmount($discount, $minimumAmount, $minimumShippingIncluded));
-        }
-
+        $updatableProperties = [];
         // Product conditions can define product segments or a list of products (which is equivalent to a segment based on a product criteria)
         if (null !== $productConditions) {
             $updatableProperties = array_merge($updatableProperties, $this->applyProductConditions($discount, $productConditions));
+        }
+        if (null !== $carrierIds) {
+            $updatableProperties = array_merge($updatableProperties, $this->applyCarrierConditions($discount, $carrierIds));
+        }
+        if (null !== $countryIds) {
+            $updatableProperties = array_merge($updatableProperties, $this->applyCountryConditions($discount, $countryIds));
+        }
+        if (null !== $customerGroupIds) {
+            $updatableProperties = array_merge($updatableProperties, $this->applyCustomerGroups($discount, $customerGroupIds));
         }
 
         $updatableProperties = array_unique($updatableProperties);
         if (!empty($updatableProperties)) {
             $this->discountRepository->partialUpdate($discount, $updatableProperties, CannotUpdateDiscountException::FAILED_UPDATE_CONDITIONS);
         }
-    }
-
-    private function updateMinimalProductQuantity(CartRule $discount, int $minimumProductsQuantity): array
-    {
-        $discount->minimum_product_quantity = $minimumProductsQuantity;
-
-        return ['minimum_product_quantity'];
-    }
-
-    private function updateMinimalAmount(CartRule $discount, Money $minimumAmount, bool $minimumShippingIncluded): array
-    {
-        $discount->minimum_amount = (float) (string) $minimumAmount->getAmount();
-        $discount->minimum_amount_currency = $minimumAmount->getCurrencyId()->getValue();
-        $discount->minimum_amount_tax = $minimumAmount->isTaxIncluded();
-        $discount->minimum_amount_shipping = $minimumShippingIncluded;
-
-        return [
-            'minimum_amount',
-            'minimum_amount_currency',
-            'minimum_amount_tax',
-            'minimum_amount_shipping',
-        ];
     }
 
     /**
@@ -104,15 +87,26 @@ class DiscountConditionsUpdater
         CartRule $discount,
         array $productRuleGroups,
     ): array {
-        $this->cleanDiscountProductRules($discount);
+        // First clear all product rules (meaning if empty array is provided in this method, they are removed and no
+        // new one is created, which is used to remove product conditions)
+        $updatableProperties = $this->cleanDiscountProductRules($discount);
+        if (!$this->isSegmentTargeted($productRuleGroups)) {
+            return $updatableProperties;
+        }
 
         foreach ($productRuleGroups as $productRuleGroup) {
             // First create group
             $this->connection->createQueryBuilder()
                 ->insert($this->dbPrefix . 'cart_rule_product_rule_group')
                 ->values([
-                    'id_cart_rule' => (int) $discount->id,
+                    'id_cart_rule' => ':discountId',
+                    'quantity' => ':quantity',
+                    'type' => ':type',
+                ])
+                ->setParameters([
+                    'discountId' => (int) $discount->id,
                     'quantity' => $productRuleGroup->getQuantity(),
+                    'type' => $productRuleGroup->getType()->value,
                 ])
                 ->executeStatement()
             ;
@@ -153,25 +147,61 @@ class DiscountConditionsUpdater
             }
         }
         $discount->product_restriction = !empty($productRuleGroups);
+        $updatableProperties[] = 'product_restriction';
 
-        return ['product_restriction'];
+        // Product level discount now uses a condition on a segment of product, we need to update the
+        // reduction_product property with the specific value (only for product level because this property
+        // tells us that the discount applies on the whole segment)
+        if ($discount->getType() === DiscountType::PRODUCT_LEVEL) {
+            $discount->reduction_product = DiscountSettings::PRODUCT_SEGMENT;
+            $updatableProperties[] = 'reduction_product';
+        }
+
+        return $updatableProperties;
     }
 
-    private function cleanAllConditions(CartRule $discount): array
+    private function applyCarrierConditions(CartRule $discount, array $carrierIds): array
     {
-        $discount->minimum_product_quantity = 0;
-        $discount->minimum_amount = 0;
-        $discount->minimum_amount_currency = 0;
-        $discount->minimum_amount_tax = false;
-        $discount->minimum_amount_shipping = false;
+        $updatableProperties = $this->cleanDiscountCarriers($discount);
+        if (empty($carrierIds)) {
+            return $updatableProperties;
+        }
 
-        return array_merge($this->cleanDiscountProductRules($discount), [
-            'minimum_product_quantity',
-            'minimum_amount',
-            'minimum_amount_currency',
-            'minimum_amount_tax',
-            'minimum_amount_shipping',
-        ]);
+        $discount->carrier_restriction = true;
+        foreach ($carrierIds as $carrierId) {
+            $this->connection->createQueryBuilder()
+                ->insert($this->dbPrefix . 'cart_rule_carrier')
+                ->values([
+                    'id_cart_rule' => (int) $discount->id,
+                    'id_carrier' => $carrierId,
+                ])
+                ->executeStatement()
+            ;
+        }
+
+        return ['carrier_restriction'];
+    }
+
+    private function applyCountryConditions(CartRule $discount, array $countryIds): array
+    {
+        $updatableProperties = $this->cleanDiscountCountries($discount);
+        if (empty($countryIds)) {
+            return $updatableProperties;
+        }
+
+        $discount->country_restriction = true;
+        foreach ($countryIds as $countryId) {
+            $this->connection->createQueryBuilder()
+                ->insert($this->dbPrefix . 'cart_rule_country')
+                ->values([
+                    'id_cart_rule' => (int) $discount->id,
+                    'id_country' => $countryId,
+                ])
+                ->executeStatement()
+            ;
+        }
+
+        return ['country_restriction'];
     }
 
     private function cleanDiscountProductRules(CartRule $discount): array
@@ -181,8 +211,8 @@ class DiscountConditionsUpdater
 
         // First delete all associated product rule groups
         $this->connection->createQueryBuilder()
-            ->delete($this->dbPrefix . 'cart_rule_product_rule_group', 'prg')
-            ->where('prg.id_cart_rule = :discountId')
+            ->delete($this->dbPrefix . 'cart_rule_product_rule_group')
+            ->where('id_cart_rule = :discountId')
             ->setParameter('discountId', (int) $discount->id)
             ->executeStatement()
         ;
@@ -200,6 +230,94 @@ class DiscountConditionsUpdater
             WHERE pr.id_product_rule = NULL
         ');
 
-        return ['product_restriction'];
+        $updatableProperties = ['product_restriction'];
+
+        // If the discount was targeting a product segment, since we just removed it we reset the reduction_product property
+        if ($discount->reduction_product === DiscountSettings::PRODUCT_SEGMENT) {
+            // No more segment, no more target
+            $discount->reduction_product = 0;
+            $updatableProperties[] = 'reduction_product';
+        }
+
+        return $updatableProperties;
+    }
+
+    private function cleanDiscountCarriers(CartRule $discount): array
+    {
+        // Disable carrier restriction
+        $discount->carrier_restriction = false;
+
+        $this->connection->createQueryBuilder()
+            ->delete($this->dbPrefix . 'cart_rule_carrier')
+            ->where('id_cart_rule = :discountId')
+            ->setParameter('discountId', (int) $discount->id)
+            ->executeStatement()
+        ;
+
+        return ['carrier_restriction'];
+    }
+
+    private function cleanDiscountCountries(CartRule $discount): array
+    {
+        // Disable country restriction
+        $discount->country_restriction = false;
+
+        $this->connection->createQueryBuilder()
+            ->delete($this->dbPrefix . 'cart_rule_country')
+            ->where('id_cart_rule = :discountId')
+            ->setParameter('discountId', (int) $discount->id)
+            ->executeStatement()
+        ;
+
+        return ['country_restriction'];
+    }
+
+    /**
+     * Update customer group restrictions for a discount.
+     *
+     * @param CartRule $discount
+     * @param int[] $customerGroupIds
+     *
+     * @return array List of updated properties
+     */
+    private function applyCustomerGroups(CartRule $discount, array $customerGroupIds): array
+    {
+        $updatableProperties = $this->cleanCustomerGroups($discount);
+        if (empty($customerGroupIds)) {
+            return $updatableProperties;
+        }
+
+        $discount->group_restriction = true;
+        foreach ($customerGroupIds as $groupId) {
+            $this->connection->createQueryBuilder()
+                ->insert($this->dbPrefix . 'cart_rule_group')
+                ->values([
+                    'id_cart_rule' => (int) $discount->id,
+                    'id_group' => $groupId,
+                ])
+                ->executeStatement()
+            ;
+        }
+
+        return ['group_restriction'];
+    }
+
+    /**
+     * Clean all customer groups for a discount.
+     *
+     * @return array List of updated properties
+     */
+    private function cleanCustomerGroups(CartRule $discount): array
+    {
+        $discount->group_restriction = false;
+
+        $this->connection->createQueryBuilder()
+            ->delete($this->dbPrefix . 'cart_rule_group')
+            ->where('id_cart_rule = :discountId')
+            ->setParameter('discountId', (int) $discount->id)
+            ->executeStatement()
+        ;
+
+        return ['group_restriction'];
     }
 }

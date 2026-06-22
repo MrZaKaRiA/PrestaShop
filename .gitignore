@@ -109,6 +109,8 @@ tests-legacy/.phpunit.result.cache
 !/admin-dev/export/.htaccess
 !/admin-dev/export/index.php
 
+/admin-dev/bundles/*
+
 # Downloaded RTL files
 /admin-dev/themes/default/css/bundle/default_rtl.css
 /admin-dev/themes/default/css/bundle/shared_rtl.css
@@ -137,7 +139,6 @@ themes/*-chunk.js.map
 
 # Config
 
-/.env
 /.env.local
 /.env.local.php
 /.env.*.local
@@ -231,3 +232,6 @@ docker-compose.override.yml
 
 # config vscode
 .hintrc
+
+# Claude Code - personal settings (commands are shared, settings are not)
+.claude/settings.local.json

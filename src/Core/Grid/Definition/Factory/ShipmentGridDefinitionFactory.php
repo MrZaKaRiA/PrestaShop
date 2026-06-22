@@ -1,27 +1,7 @@
 <?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 
 namespace PrestaShop\PrestaShop\Core\Grid\Definition\Factory;
@@ -29,7 +9,11 @@ namespace PrestaShop\PrestaShop\Core\Grid\Definition\Factory;
 use PrestaShop\PrestaShop\Core\Context\LanguageContext;
 use PrestaShop\PrestaShop\Core\Grid\Action\Row\RowActionCollection;
 use PrestaShop\PrestaShop\Core\Grid\Action\Row\RowActionCollectionInterface;
-use PrestaShop\PrestaShop\Core\Grid\Action\Row\Type\Shipment\AdditionalShipmentRowAction;
+use PrestaShop\PrestaShop\Core\Grid\Action\Row\Type\Shipment\DeliverySlipShipmentRowAction;
+use PrestaShop\PrestaShop\Core\Grid\Action\Row\Type\Shipment\EditShipmentRowAction;
+use PrestaShop\PrestaShop\Core\Grid\Action\Row\Type\Shipment\FulfillShipmentRowAction;
+use PrestaShop\PrestaShop\Core\Grid\Action\Row\Type\Shipment\MergeShipmentRowAction;
+use PrestaShop\PrestaShop\Core\Grid\Action\Row\Type\Shipment\SplitShipmentRowAction;
 use PrestaShop\PrestaShop\Core\Grid\Column\ColumnCollection;
 use PrestaShop\PrestaShop\Core\Grid\Column\Type\Common\ActionColumn;
 use PrestaShop\PrestaShop\Core\Grid\Column\Type\Common\DataColumn;
@@ -76,6 +60,8 @@ final class ShipmentGridDefinitionFactory extends AbstractFilterableGridDefiniti
                     'field' => 'date',
                     'format' => $this->languageContext->getDateTimeFormat(),
                     'clickable' => true,
+                    'sortable' => false,
+                    'alignment' => 'left',
                 ])
             )
             ->add(
@@ -85,6 +71,7 @@ final class ShipmentGridDefinitionFactory extends AbstractFilterableGridDefiniti
                         'identifier_field' => 'shipment_number',
                         'bulk_field' => 'shipment_number',
                         'with_bulk_field' => false,
+                        'sortable' => false,
                         'clickable' => false,
                     ])
             )
@@ -93,7 +80,7 @@ final class ShipmentGridDefinitionFactory extends AbstractFilterableGridDefiniti
                     ->setName($this->trans('Carrier', [], 'Admin.Global'))
                     ->setOptions([
                         'field' => 'carrier',
-                        'sortable' => true,
+                        'sortable' => false,
                         'alignment' => 'left',
                     ])
             )
@@ -102,17 +89,17 @@ final class ShipmentGridDefinitionFactory extends AbstractFilterableGridDefiniti
                     ->setName($this->trans('Items', [], 'Admin.Global'))
                     ->setOptions([
                         'field' => 'items',
-                        'sortable' => true,
-                        'alignment' => 'left',
+                        'sortable' => false,
+                        'alignment' => 'right',
                     ])
             )
             ->add(
-                (new DataColumn('price'))
-                    ->setName($this->trans('Price', [], 'Admin.Global'))
+                (new DataColumn('shipping_cost'))
+                    ->setName($this->trans('Shipping cost', [], 'Admin.Global'))
                     ->setOptions([
-                        'field' => 'price',
-                        'sortable' => true,
-                        'alignment' => 'left',
+                        'field' => 'shipping_cost',
+                        'sortable' => false,
+                        'alignment' => 'right',
                     ])
             )
             ->add(
@@ -120,7 +107,7 @@ final class ShipmentGridDefinitionFactory extends AbstractFilterableGridDefiniti
                     ->setName($this->trans('Weight', [], 'Admin.Global'))
                     ->setOptions([
                         'field' => 'weight',
-                        'sortable' => true,
+                        'sortable' => false,
                         'alignment' => 'left',
                     ])
             )
@@ -129,7 +116,7 @@ final class ShipmentGridDefinitionFactory extends AbstractFilterableGridDefiniti
                     ->setName($this->trans('Tracking number', [], 'Admin.Global'))
                     ->setOptions([
                         'field' => 'tracking_number',
-                        'sortable' => true,
+                        'sortable' => false,
                         'alignment' => 'left',
                     ])
             )->add(
@@ -143,18 +130,64 @@ final class ShipmentGridDefinitionFactory extends AbstractFilterableGridDefiniti
         return $columns;
     }
 
-    /**
-     * @return RowActionCollectionInterface
-     */
-    private function getRowActions()
+    private function getRowActions(): RowActionCollectionInterface
     {
-        return (new RowActionCollection())
+        $rowActions = new RowActionCollection();
+        $rowActions
             ->add(
-                (new AdditionalShipmentRowAction('More'))
-                    ->setName($this->trans('More', [], 'Admin.Actions'))
-                    ->setIcon('more_vert')
+                (new EditShipmentRowAction('Edit'))
+                    ->setName($this->trans('Edit', [], 'Admin.Actions'))
+                    ->setIcon('edit')
+                    ->setOptions([
+                        'tracking_number' => 'tracking_number',
+                        'carrier' => 'carrier',
+                        'shipment_id_field' => 'shipment_number',
+                        'order_id_field' => 'order_id',
+                    ])
+            )
+            ->add(
+                (new DeliverySlipShipmentRowAction('print_delivery_slip'))
+                    ->setName($this->trans('Download delivery slip', [], 'Admin.Orderscustomers.Feature'))
+                    ->setIcon('local_shipping')
+                    ->setOptions([
+                        'route' => 'admin_orders_generate_shipment_delivery_slip_pdf',
+                        'route_param_name' => 'orderId',
+                        'route_param_field' => 'order_id',
+                        'extra_route_params' => [
+                            'shipmentId' => 'shipment_number',
+                        ],
+                    ])
+            )
+            ->add(
+                (new FulfillShipmentRowAction('fulfill'))
+                    ->setName($this->trans('Fulfill', [], 'Admin.Actions'))
+                    ->setIcon('package_2')
                     ->setOptions([
                         'shipment_id_field' => 'shipment_number',
-                    ]));
+                        'order_id_field' => 'order_id',
+                    ])
+            )
+            ->add(
+                (new SplitShipmentRowAction('split'))
+                    ->setName($this->trans('Split', [], 'Admin.Actions'))
+                    ->setIcon('call_split')
+                    ->setOptions([
+                        'shipment_id_field' => 'shipment_number',
+                        'order_id_field' => 'order_id',
+                        'items' => 'items',
+                    ])
+            )
+            ->add(
+                (new MergeShipmentRowAction('merge'))
+                    ->setName($this->trans('Merge', [], 'Admin.Actions'))
+                    ->setIcon('call_merge')
+                    ->setOptions([
+                        'shipment_id_field' => 'shipment_number',
+                        'order_id_field' => 'order_id',
+                        'total_shipments' => 'total_shipments',
+                    ])
+            );
+
+        return $rowActions;
     }
 }

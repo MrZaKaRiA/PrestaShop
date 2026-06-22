@@ -2,23 +2,27 @@
   "compilerOptions": {
     "noImplicitAny": true,
     "noImplicitThis": true,
-    "module": "commonjs",
-    "target": "es5",
+    "module": "NodeNext",
+    "target": "ESNext",
     "strict": true,
-    "moduleResolution": "node",
+    "moduleResolution": "nodenext",
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "allowJs": true,
-    "downlevelIteration": true,
-    "baseUrl": "./",
+    "isolatedModules": true,
+    "strictPropertyInitialization": true,
     "paths": {
-      "@commonTests/*": ["commonTests/*"],
-      "@data/*": ["data/*"],
-      "@utils/*": ["utils/*"],
-      "@tools/*": ["tools/*"],
-      "@webservices/*": ["webservices/*"]
+      "@commonTests/*": ["./commonTests/*"],
+      "@data/*": ["./data/*"],
+      "@utils/*": ["./utils/*"],
+      "@tools/*": ["./tools/*"],
+      "@webservices/*": ["./webservices/*"]
     },
+    "rootDir": "./",
+    "types": [
+      "node"
+    ],
     "typeRoots": ["types", "node_modules/@types"],
     "skipLibCheck": true,
     "noEmit": true

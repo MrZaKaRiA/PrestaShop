@@ -1,27 +1,7 @@
 <?php
 /**
- * Copyright since 2007 PrestaShop SA and Contributors
- * PrestaShop is an International Registered Trademark & Property of PrestaShop SA
- *
- * NOTICE OF LICENSE
- *
- * This source file is subject to the Open Software License (OSL 3.0)
- * that is bundled with this package in the file LICENSE.md.
- * It is also available through the world-wide-web at this URL:
- * https://opensource.org/licenses/OSL-3.0
- * If you did not receive a copy of the license and are unable to
- * obtain it through the world-wide-web, please send an email
- * to license@prestashop.com so we can send you a copy immediately.
- *
- * DISCLAIMER
- *
- * Do not edit or add to this file if you wish to upgrade PrestaShop to newer
- * versions in the future. If you wish to customize PrestaShop for your
- * needs please refer to https://devdocs.prestashop.com/ for more information.
- *
- * @author    PrestaShop SA and Contributors <contact@prestashop.com>
- * @copyright Since 2007 PrestaShop SA and Contributors
- * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 
 declare(strict_types=1);
@@ -416,5 +396,59 @@ class CQRSCreateTest extends TestCase
         $this->assertNotNull($caughtException);
         $this->assertInstanceOf(InvalidArgumentException::class, $caughtException);
         $this->assertEquals('Specifying an extra property experimentalOperation and a experimentalOperation argument that are different is invalid', $caughtException->getMessage());
+    }
+
+    public function testAllowEmptyBody(): void
+    {
+        // Default value is false (no extra property added)
+        $operation = new CQRSCreate();
+        $this->assertEquals([], $operation->getExtraProperties());
+        $this->assertEquals(false, $operation->getAllowEmptyBody());
+
+        // Scopes parameters in constructor
+        $operation = new CQRSCreate(
+            allowEmptyBody: true,
+        );
+        $this->assertEquals(['allowEmptyBody' => true], $operation->getExtraProperties());
+        $this->assertEquals(true, $operation->getAllowEmptyBody());
+
+        // Extra properties parameters in constructor
+        $operation = new CQRSCreate(
+            extraProperties: ['allowEmptyBody' => false]
+        );
+        $this->assertEquals(['allowEmptyBody' => false], $operation->getExtraProperties());
+        $this->assertEquals(false, $operation->getAllowEmptyBody());
+
+        // Extra properties AND scopes parameters in constructor, both values get merged but remain unique
+        $operation = new CQRSCreate(
+            extraProperties: ['allowEmptyBody' => true],
+            allowEmptyBody: true,
+        );
+        $this->assertEquals(['allowEmptyBody' => true], $operation->getExtraProperties());
+        $this->assertEquals(true, $operation->getAllowEmptyBody());
+
+        // Use with method, returned object is a clone All values are replaced
+        $operation2 = $operation->withallowEmptyBody(false);
+        $this->assertNotEquals($operation2, $operation);
+        $this->assertEquals(['allowEmptyBody' => false], $operation2->getExtraProperties());
+        $this->assertEquals(false, $operation2->getAllowEmptyBody());
+        // Initial operation not modified of course
+        $this->assertEquals(['allowEmptyBody' => true], $operation->getExtraProperties());
+        $this->assertEquals(true, $operation->getAllowEmptyBody());
+
+        // When both values are specified, but they are different trigger an exception
+        $caughtException = null;
+        try {
+            new CQRSCreate(
+                extraProperties: ['allowEmptyBody' => true],
+                allowEmptyBody: false,
+            );
+        } catch (InvalidArgumentException $e) {
+            $caughtException = $e;
+        }
+
+        $this->assertNotNull($caughtException);
+        $this->assertInstanceOf(InvalidArgumentException::class, $caughtException);
+        $this->assertEquals('Specifying an extra property allowEmptyBody and a allowEmptyBody argument that are different is invalid', $caughtException->getMessage());
     }
 }
