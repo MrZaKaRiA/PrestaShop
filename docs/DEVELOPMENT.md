@@ -30,6 +30,7 @@ make docker-start
 
 ### 2. Access Your Installation
 
+**Default network addresses:**
 - **Frontend**: http://localhost:8001
 - **Backend**: http://localhost:8001/admin-dev
 - **MailDev**: http://localhost:1080 (email testing)
@@ -85,15 +86,30 @@ make help # Show all available commands
 | Command | Description |
 |---------|-------------|
 | `make assets` | Build all assets (admin + front) |
-| `make assets-dev` | Start development servers for all themes |
+| `make assets-clean` | Build all assets, forcing a clean reinstall of `node_modules` |
 | `make wait-assets` | Wait for assets to finish building |
 | `make admin` | Build admin assets (default + new theme) |
-| `make front` | Build front assets (core + classic) |
+| `make front` | Build front assets (core + classic + hummingbird) |
 | `make admin-default` | Build default admin theme assets |
 | `make admin-new-theme` | Build new admin theme assets |
 | `make front-core` | Build core front theme assets |
 | `make front-classic` | Build classic front theme assets |
 | `make front-hummingbird` | Build hummingbird theme assets |
+| `make watch-admin-default` | Watch and rebuild default admin theme assets |
+| `make watch-admin-new-theme` | Watch and rebuild new admin theme assets |
+| `make watch-front-core` | Watch and rebuild core front theme assets |
+| `make watch-front-classic` | Watch and rebuild classic front theme assets |
+| `make watch-front-hummingbird` | Watch and rebuild hummingbird theme assets |
+
+The `watch-*` targets rebuild one theme on every change and stay in the foreground until
+you stop them with `Ctrl+C`. They write **unminified development assets**, and leave a
+`.ps-dev-build` marker in the theme so the next build knows the assets on disk are not a
+finished build: run the matching build target before committing or releasing.
+
+> Stop a watch with `Ctrl+C` from the terminal that started it. `docker exec` does not
+> forward signals, so interrupting a watch started without a terminal attached (CI, an IDE
+> task runner) leaves the watcher running inside the container, where it will keep
+> overwriting the built assets.
 
 ### PrestaShop Installation
 
@@ -158,7 +174,14 @@ make help # Show all available commands
 | | `USER_ID` | `1000` | User ID for container |
 | | `GROUP_ID` | `1000` | Group ID for container |
 | | `DISABLE_MAKE` | `0` | Disable make commands |
-| | `PS_HOSTNAME` | `localhost` | Container hostname |
+| **Network** | `PS_HOSTNAME` | `localhost` | Container hostname |
+| | `DB_HOST_PORT` | `3306` | Port used to reach the SQL server from the Docker host |
+| | `HTTP_HOST_PORT` | `8001` | Port used to reach the web server HTTP protocol from the Docker host |
+| | `HTTPS_HOST_PORT` | `8002` | Port used to reach the web server HTTPS protocol from the Docker host |
+| | `MAILDEV_UI_HOST_PORT` | `1080` | Port used to reach the mail server (web interface) from the Docker host |
+| | `MAILDEV_SMTP_HOST_PORT` | `1025` | Port used to reach the SMTP server from the Docker host |
+| | `PHPMYADMIN_HOST_PORT` | `8080` | Port used to reach the PhpMyAdmin application |
+| | `NETWORK_NAME` | `prestashop-network` | Alias name of the network |
 
 ## Development Workflow
 
@@ -183,24 +206,35 @@ The asset build system provides a simple and reliable way to build all assets:
 
 - **Always Fresh**: Assets are always rebuilt to ensure consistency
 - **Parallel Execution**: Multiple assets build in parallel for faster builds
-- **Clean Builds**: Node modules are cleaned and reinstalled for each build
+- **Incremental Installs**: `npm ci` only runs when a theme's dependencies actually changed, so repeated builds are much faster
 
 **Examples:**
 ```bash
 # Build all assets
 make assets
+# Build all assets, forcing a clean reinstall of node_modules
+make assets-clean
 # Build Admin default theme
 make admin-default
+# Watch and rebuild the core front theme on every change (Ctrl+C to stop)
+make watch-front-core
 
 # Direct script usage (dry-run by default. Use --force to force rebuild)
 
 # All assets
 ./tools/assets/build.sh # dry-run
-./tools/assets/build/sh --force
+./tools/assets/build.sh --force
 
 # Specific asset
 ./tools/assets/build.sh admin-default # dry-run
 ./tools/assets/build.sh admin-default --force
+
+# Force a clean reinstall of node_modules (implies --force)
+./tools/assets/build.sh --force-install
+./tools/assets/build.sh admin-default --force-install
+
+# Watch a single asset (development build)
+./tools/assets/build.sh admin-default --watch
 ```
 
 ### Performance Tips
@@ -231,7 +265,7 @@ make admin-default
 
 #### Port Already in Use
 
-**Solutions:**
+**Solution 1:**
 
 1. **Check what's using the port:**
    ```bash
@@ -243,6 +277,10 @@ make admin-default
    docker ps
    docker stop <container-id>
    ```
+
+**Solution 2:**
+
+ Customize the ports used by the containers with the environment variables provided as explained in [The Docker documentation](https://docs.docker.com/compose/how-tos/environment-variables/envvars/).
 
 #### Image Build Fails
 

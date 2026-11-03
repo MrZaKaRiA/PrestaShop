@@ -9,7 +9,14 @@ declare(strict_types=1);
 
 namespace PrestaShop\PrestaShop\Core\ExtraProperty\Definition;
 
+use PrestaShop\PrestaShop\Adapter\Shop\Repository\ShopRepository;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Constraint\ExtraPropertyConstraintRenderer;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Exception\ExtraPropertyException;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Exception\ExtraPropertyRegistryException;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Exception\InvalidExtraPropertyConstraintException;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Form\FormOptionsValidator;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Schema\ExtraPropertySchemaManagerInterface;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Validation\ExtraPropertyValidator;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
@@ -32,6 +39,10 @@ class ExtraPropertyRegistry implements ExtraPropertyRegistryInterface
         protected readonly ExtraPropertyDefinitionWriterInterface $writeRepository,
         protected readonly ExtraPropertySchemaManagerInterface $schemaManager,
         protected readonly LoggerInterface $logger,
+        // Required: the registry is only defined in Symfony kernels (services/extra_property/backend.yml),
+        // where the form factory is always available — never in the FO legacy container.
+        protected readonly FormOptionsValidator $formOptionsValidator,
+        protected readonly ShopRepository $shopRepository,
     ) {
     }
 
@@ -44,18 +55,35 @@ class ExtraPropertyRegistry implements ExtraPropertyRegistryInterface
      * The registry additionally validates:
      * - scope-uniqueness: a module cannot register the same propertyName in two different scopes for the same entity
      * - destructive schema changes on already-registered definitions are refused (see hasStorageChanges())
+     * - formType/formOptions must build a working form field (see FormOptionsValidator) — being the single
+     *   write choke point, this covers every path: BO form, CQRS commands and Module::registerExtraProperty()
+     * - every shop id in the shop association must exist (the association rows carry no foreign key)
      *
      * Non-destructive schema changes (defaultValue change, STRING size increase, nullable
      * relaxing, CHOICE enum value addition) are applied to the live column by the schema
      * manager: ensureExtraTableAndColumn() syncs the column definition the same way it
      * syncs the index.
      *
-     * Operation order: validate changes → persist to DB → create/alter DDL.
-     * Note: if DDL fails after DB persistence, a retry of register() re-attempts the DDL.
+     * Operation order: validate changes → create/alter DDL → persist to DB. DDL runs FIRST
+     * on purpose: MySQL/MariaDB DDL statements trigger an implicit commit, so a transaction
+     * wrapping "row write + DDL" could never roll the row back once the DDL ran. Ordering the
+     * single row write last gives the equivalent guarantees instead:
+     *   - creation failure persists nothing (no orphan definition row);
+     *   - update DDL failure leaves the previous definition row intact;
+     *   - a row-write failure after DDL on a CREATION removes the column it just added
+     *     (best-effort compensation, gated on the column having actually been added by this
+     *     call so pre-existing data is never dropped);
+     *   - a row-write failure after DDL on an UPDATE leaves the column synced — harmless,
+     *     a retry of register() re-attempts the row write (save() is idempotent).
      * Destructive changes (type/scope change, size decrease, nullable tightening, enum value
      * removal) require unregister() + register() — automatic data migration is not supported.
+     *
+     * @throws ExtraPropertyRegistryException the failure reason is carried by the exception code:
+     *                                        SCOPE_CONFLICT, DESTRUCTIVE_SCHEMA_CHANGE, INVALID_FORM_OPTIONS, INVALID_CONSTRAINTS,
+     *                                        UNKNOWN_SHOP, BASE_TABLE_NOT_FOUND, SCHEMA_FAILURE or
+     *                                        PERSISTENCE_FAILURE
      */
-    public function register(ExtraPropertyDefinition $definition): bool
+    public function register(ExtraPropertyDefinition $definition): int
     {
         $entityName = $definition->getEntityName();
         $propertyName = $definition->getPropertyName();
@@ -65,7 +93,26 @@ class ExtraPropertyRegistry implements ExtraPropertyRegistryInterface
         $scope = $definition->getScope();
         $normalizedScope = $scope->value;
 
-        // 1. (entity, module, property) is unique across scopes — a single lookup covers both
+        // 1. Refuse constraints that cannot be stored, before any DDL runs: a definition rejected
+        // later would otherwise leave an orphan storage column behind.
+        try {
+            // The result is discarded: this is a dry-run of the exact render save() will persist,
+            // so a constraint that cannot be stored is refused here rather than after step 7
+            // created the storage column.
+            ExtraPropertyConstraintRenderer::render($definition->getConstraints());
+        } catch (InvalidExtraPropertyConstraintException $exception) {
+            $message = sprintf(
+                'Invalid constraints for extra property %s.%s: %s',
+                $entityName,
+                $propertyName,
+                $exception->getMessage()
+            );
+            $this->logger->error($message, ['exception' => $exception]);
+
+            throw new ExtraPropertyRegistryException($message, ExtraPropertyRegistryException::INVALID_CONSTRAINTS, $exception);
+        }
+
+        // 2. (entity, module, property) is unique across scopes — a single lookup covers both
         // the scope-uniqueness rule and the immutability check on an existing definition.
         $existingDefinition = $this->readRepository->findDefinitionByModuleAndField(
             $entityName,
@@ -74,46 +121,177 @@ class ExtraPropertyRegistry implements ExtraPropertyRegistryInterface
         );
 
         if (null !== $existingDefinition && $existingDefinition->getScope() !== $scope) {
-            $this->logger->error(
-                'Cannot register extra property {entity}.{field}: already registered with scope "{existing_scope}", cannot also register with scope "{new_scope}".',
-                ['entity' => $entityName, 'field' => $propertyName, 'existing_scope' => $existingDefinition->getScope()->value, 'new_scope' => $normalizedScope]
+            $message = sprintf(
+                'Cannot register extra property %s.%s: already registered with scope "%s", cannot also register with scope "%s".',
+                $entityName,
+                $propertyName,
+                $existingDefinition->getScope()->value,
+                $normalizedScope
             );
+            $this->logger->error($message);
 
-            return false;
+            throw new ExtraPropertyRegistryException($message, ExtraPropertyRegistryException::SCOPE_CONFLICT);
         }
 
-        // 2. Refuse destructive schema changes on an existing definition.
+        // 3. Refuse a different entity name resolving to the SAME storage (table + column):
+        // the DB unique key on (entity_name, module_name, property_name) cannot see across
+        // entity spellings, but two definitions writing the same physical column would
+        // corrupt each other (an explicit tableName pointing at another entity's table is
+        // the reachable case — canonical entity names already converge the known spellings).
+        if (null === $existingDefinition) {
+            foreach ($this->readRepository->getAllDefinitions()->filterByTableName($definition->getTableName()) as $sibling) {
+                if ($sibling->getStorageColumnName() === $definition->getStorageColumnName()
+                    && $sibling->getEntityName() !== $entityName
+                ) {
+                    $message = sprintf(
+                        'Cannot register extra property %s.%s: the definition %s.%s already stores its values in the same column ("%s" on the "%s" table). Use one entity name consistently.',
+                        $entityName,
+                        $propertyName,
+                        $sibling->getEntityName(),
+                        $sibling->getPropertyName(),
+                        $definition->getStorageColumnName(),
+                        $definition->getTableName()
+                    );
+                    $this->logger->error($message);
+
+                    throw new ExtraPropertyRegistryException($message, ExtraPropertyRegistryException::STORAGE_CONFLICT);
+                }
+            }
+        }
+
+        // 4. Refuse destructive schema changes on an existing definition.
         if (null !== $existingDefinition && $this->hasStorageChanges($definition, $existingDefinition)) {
-            $this->logger->error(
-                'Refusing destructive schema change (type/scope change, size decrease, nullable tightening, enum value removal) for existing extra property {entity}.{field}.',
-                ['entity' => $entityName, 'field' => $propertyName]
+            $message = sprintf(
+                'Refusing destructive schema change (type/scope/table change, size decrease, nullable tightening, enum value removal) for existing extra property %s.%s.',
+                $entityName,
+                $propertyName
             );
+            $this->logger->error($message);
 
-            return false;
+            throw new ExtraPropertyRegistryException($message, ExtraPropertyRegistryException::DESTRUCTIVE_SCHEMA_CHANGE);
         }
 
-        // 3. Insert or update the registry row.
-        $savedId = $this->writeRepository->save($definition);
+        // 5. Refuse a definition whose form field could not be built at render time — being the
+        // single write choke point, this covers every path: BO form, CQRS commands and
+        // Module::registerExtraProperty(). The errors must reach the human who typed the options.
+        $formOptionErrors = $this->formOptionsValidator->validate(
+            $definition->getFormType(),
+            $definition->getType(),
+            $definition->getEnumValues(),
+            $definition->getScope(),
+            $definition->getFormOptions()
+        );
+        if ([] !== $formOptionErrors) {
+            // The property is named like in every other refusal of this method: a module install
+            // registers many definitions in a row, and the stack trace alone does not tell which
+            // one the container refused.
+            $message = sprintf(
+                'Invalid extra property form options for %s.%s: %s',
+                $entityName,
+                $propertyName,
+                implode(' ', $formOptionErrors)
+            );
+            $this->logger->error($message);
 
-        if (false === $savedId) {
-            return false;
+            throw new ExtraPropertyRegistryException($message, ExtraPropertyRegistryException::INVALID_FORM_OPTIONS, errors: $formOptionErrors);
         }
 
-        // 4. Ensure the *_extra table and column exist and match the definition: the schema
-        //    manager also syncs remaining non-destructive changes on the live column
-        //    (DDL after DB write).
+        // 3b. Refuse a defaultValue that does not fit the declared type, BEFORE any DDL: a
+        //     malformed DATE default would otherwise be silently erased on hydration, a
+        //     non-numeric INT/FLOAT default silently coerced, and a CHOICE default outside
+        //     the enum would produce a DDL DEFAULT the column itself refuses.
+        if (null !== $definition->getDefaultValue() && !$this->isDefaultValueCompatible($definition)) {
+            $message = sprintf(
+                'Cannot register extra property %s.%s: default value "%s" is not a valid %s value%s.',
+                $entityName,
+                $propertyName,
+                is_bool($definition->getDefaultValue()) ? var_export($definition->getDefaultValue(), true) : (string) $definition->getDefaultValue(),
+                $definition->getType()->value,
+                ExtraPropertyType::CHOICE === $definition->getType() && null !== $definition->getEnumValues()
+                    ? ' (allowed: ' . implode(', ', $definition->getEnumValues()) . ')'
+                    : ''
+            );
+            $this->logger->error($message);
+
+            throw new ExtraPropertyRegistryException($message, ExtraPropertyRegistryException::INVALID_DEFAULT_VALUE);
+        }
+
+        // 6. Refuse unknown shop ids in the association, BEFORE any DDL or row write: the
+        //    association rows carry no foreign key, so an unknown id (e.g. a module calling
+        //    registerExtraProperty() with a wrong shop id) would be stored silently and make
+        //    the definition invisible on every real shop. Being the single write choke point,
+        //    this covers the BO form, the CQRS commands and Module::registerExtraProperty().
+        //    null (untouched) and [] (revert to fallback) carry no id to check.
+        //    Deliberately validated against EVERY existing shop (getAllShopIds(), no
+        //    active/deleted filter): an inactive shop is a legitimate restriction target —
+        //    the association is configuration and must survive deactivation/reactivation
+        //    cycles. A definition restricted to inactive shops only is simply dormant:
+        //    group/all-shops resolution covers usable shops only (ShopListResolver), so it
+        //    surfaces nowhere at runtime, while the registry grid's all-shops management
+        //    view still lists it for editing.
+        $associatedShopIds = $definition->getAssociatedShopIds();
+        if (!empty($associatedShopIds)) {
+            $unknownShopIds = array_diff($associatedShopIds, $this->shopRepository->getAllShopIds());
+            if ([] !== $unknownShopIds) {
+                $message = sprintf(
+                    'Cannot register extra property %s.%s: unknown shop id(s) %s in the shop association.',
+                    $entityName,
+                    $propertyName,
+                    implode(', ', $unknownShopIds)
+                );
+                $this->logger->error($message);
+
+                throw new ExtraPropertyRegistryException($message, ExtraPropertyRegistryException::UNKNOWN_SHOP);
+            }
+        }
+
+        // 7. Ensure the *_extra table and column exist and match the definition: the schema
+        //    manager also syncs remaining non-destructive changes on the live column.
+        //    DDL runs BEFORE the row write (see the method docblock): a DDL failure here
+        //    persists nothing on a creation and leaves the previous row intact on an update.
         try {
-            $this->schemaManager->ensureExtraTableAndColumn($definition);
-        } catch (Throwable $exception) {
+            $columnAdded = $this->schemaManager->ensureExtraTableAndColumn($definition);
+        } catch (ExtraPropertyException $exception) {
             $this->logger->error(
                 'Failed to create or alter extra table/column: {message}',
                 ['message' => $exception->getMessage(), 'exception' => $exception]
             );
 
-            return false;
+            throw $exception;
+        } catch (Throwable $exception) {
+            $message = 'Failed to create or alter extra table/column: ' . $exception->getMessage();
+            $this->logger->error($message, ['exception' => $exception]);
+
+            throw new ExtraPropertyRegistryException($message, ExtraPropertyRegistryException::SCHEMA_FAILURE, $exception);
         }
 
-        return true;
+        // 8. Insert or update the registry row.
+        $savedId = $this->writeRepository->save($definition);
+
+        if (false === $savedId) {
+            // On a creation, remove the column the DDL step just added so the failed
+            // registration leaves nothing behind. Gated on $columnAdded: a column that
+            // pre-existed this call (e.g. leftover of unregister(dropColumn: false)) may
+            // still hold data and is never dropped. Best-effort: the definitive error is
+            // the persistence failure below.
+            if (null === $existingDefinition && $columnAdded) {
+                try {
+                    $this->schemaManager->dropExtraColumnIfExists($definition);
+                } catch (Throwable $cleanupException) {
+                    $this->logger->error(
+                        'Failed to clean up extra column after a persistence failure: {message}',
+                        ['message' => $cleanupException->getMessage(), 'exception' => $cleanupException]
+                    );
+                }
+            }
+
+            $message = sprintf('Failed to persist the definition row for extra property %s.%s.', $entityName, $propertyName);
+            $this->logger->error($message);
+
+            throw new ExtraPropertyRegistryException($message, ExtraPropertyRegistryException::PERSISTENCE_FAILURE);
+        }
+
+        return $savedId;
     }
 
     /**
@@ -123,8 +301,17 @@ class ExtraPropertyRegistry implements ExtraPropertyRegistryInterface
      * across scopes) and used for both the DDL drop and the registry deletion, so the
      * caller's definition does not need an accurate scope (a wrong scope would
      * otherwise target the wrong *_extra table for the column drop).
+     *
+     * Operation order: delete the registry row FIRST, drop the column second. A failed
+     * column drop then leaves a benign unreferenced column (the definition is already
+     * gone, readers never see it) instead of a broken definition pointing at a missing
+     * column. Trade-off: retrying unregister() after a failed drop is a no-op (no stored
+     * row anymore), the column has to be removed manually — the thrown exception says so.
+     *
+     * @throws ExtraPropertyRegistryException code PERSISTENCE_FAILURE when deleting the definition row fails,
+     *                                        SCHEMA_FAILURE when dropping the column fails (the row is already removed)
      */
-    public function unregister(ExtraPropertyDefinition $definition, bool $dropColumn = false): bool
+    public function unregister(ExtraPropertyDefinition $definition, bool $dropColumn = false): void
     {
         $storedDefinition = $this->readRepository->findDefinitionByModuleAndField(
             $definition->getEntityName(),
@@ -133,29 +320,67 @@ class ExtraPropertyRegistry implements ExtraPropertyRegistryInterface
         );
         if (null === $storedDefinition) {
             // Nothing registered — nothing to delete.
-            return true;
+            return;
+        }
+
+        if (!$this->writeRepository->deleteByDefinition($storedDefinition)) {
+            $message = sprintf(
+                'Failed to delete the definition row for extra property %s.%s.',
+                $storedDefinition->getEntityName(),
+                $storedDefinition->getPropertyName()
+            );
+            $this->logger->error($message);
+
+            throw new ExtraPropertyRegistryException($message, ExtraPropertyRegistryException::PERSISTENCE_FAILURE);
         }
 
         if ($dropColumn) {
             try {
                 $this->schemaManager->dropExtraColumnIfExists($storedDefinition);
-            } catch (Throwable $exception) {
+            } catch (ExtraPropertyException $exception) {
                 $this->logger->error(
                     'Failed to drop extra column: {message}',
                     ['message' => $exception->getMessage(), 'exception' => $exception]
                 );
 
-                return false;
+                throw $exception;
+            } catch (Throwable $exception) {
+                $message = sprintf(
+                    'The extra property definition %s.%s was removed but its column could not be dropped and was left in place: %s',
+                    $storedDefinition->getEntityName(),
+                    $storedDefinition->getPropertyName(),
+                    $exception->getMessage()
+                );
+                $this->logger->error($message, ['exception' => $exception]);
+
+                throw new ExtraPropertyRegistryException($message, ExtraPropertyRegistryException::SCHEMA_FAILURE, $exception);
             }
         }
+    }
 
-        return $this->writeRepository->deleteByDefinition($storedDefinition);
+    /**
+     * Whether the declared defaultValue can actually serve as a default of the declared
+     * type — the SAME isValueCompatible() rule-set the validator applies to every regular
+     * write, so what is refused as a value is refused as a default and vice versa (only
+     * literal datetimes for DATE, no 'tomorrow'; numeric strings for INT/FLOAT; enum
+     * membership for CHOICE; valid JSON…). Only the failure handling differs: here it is
+     * the INVALID_DEFAULT_VALUE registration error.
+     */
+    protected function isDefaultValueCompatible(ExtraPropertyDefinition $definition): bool
+    {
+        return ExtraPropertyValidator::isValueCompatible(
+            $definition->getType(),
+            $definition->getDefaultValue(),
+            $definition->getEnumValues()
+        );
     }
 
     /**
      * Returns true when $incoming would change the column schema in a DESTRUCTIVE way,
      * i.e. a change that risks data already stored in the extra column:
      *   - type or scope change (data conversion / storage table move)
+     *   - physical table change (a different explicit tableName): the definition would
+     *     silently relocate to another {table}_extra, orphaning every stored value
      *   - STRING size decrease — truncation risk; effective lengths compared (null ≡ 255)
      *   - nullable tightening (NULL → NOT NULL): existing NULL rows would break the ALTER
      *   - CHOICE enum value removal, or switching between ENUM and the VARCHAR fallback:
@@ -172,6 +397,10 @@ class ExtraPropertyRegistry implements ExtraPropertyRegistryInterface
     protected function hasStorageChanges(ExtraPropertyDefinition $incoming, ExtraPropertyDefinition $existing): bool
     {
         if ($incoming->getType() !== $existing->getType() || $incoming->getScope() !== $existing->getScope()) {
+            return true;
+        }
+
+        if ($incoming->getTableName() !== $existing->getTableName()) {
             return true;
         }
 

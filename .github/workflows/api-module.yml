@@ -8,9 +8,11 @@ permissions:
 concurrency:
   group: ${{ github.event_name }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+# Pull-requests on a private repository are not coming from a fork, so avoid running the same job twice with push and pull_request events.
 jobs:
   # Define which PHP versions need to be used
   workflow_matrix_generator:
+    if: github.event_name != 'push' || !github.event.repository.private
     name: PHP matrix
     uses: ./.github/workflows/workflow-matrix-generator.yml
     with:
@@ -39,11 +41,11 @@ jobs:
           mysql-version: "8.0"
           root-password: 'password'
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: PrestaShop Configuration
         run: |

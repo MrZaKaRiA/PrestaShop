@@ -8,21 +8,35 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Core\ExtraProperty;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use PrestaShop\PrestaShop\Adapter\Shop\Repository\ShopRepository;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinition;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionCollection;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionRepositoryInterface;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionWriterInterface;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyRegistry;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyScope;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyType;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Exception\ExtraPropertyRegistryException;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Form\ExtraPropertyFormTypeMap;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Form\FormOptionsValidator;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Schema\ExtraPropertySchemaManagerInterface;
 use Psr\Log\NullLogger;
+use RuntimeException;
+use Symfony\Component\Form\Extension\Validator\ValidatorExtension;
+use Symfony\Component\Form\Forms;
+use Symfony\Component\Validator\Validation;
+use Throwable;
 
 /**
  * Covers ExtraPropertyRegistry::register() change handling on already-registered
- * definitions: destructive schema changes are refused, non-destructive ones are
- * accepted (the schema manager then syncs them onto the live column — see
- * ExtraPropertySchemaManagerSyncTest).
+ * definitions (destructive schema changes are refused, non-destructive ones are
+ * accepted — the schema manager then syncs them onto the live column, see
+ * ExtraPropertySchemaManagerSyncTest), the failure contract (every hard failure
+ * throws a typed core exception), the DDL-before-save ordering that keeps a failed
+ * creation from persisting anything, and unregister()'s row-delete-before-column-drop
+ * ordering.
  */
 class ExtraPropertyRegistryTest extends TestCase
 {
@@ -31,7 +45,7 @@ class ExtraPropertyRegistryTest extends TestCase
         $incoming = $this->definition();
         $registry = $this->buildRegistry(existing: null, expectSave: true);
 
-        $this->assertTrue($registry->register($incoming));
+        $this->assertSame(1, $registry->register($incoming));
     }
 
     public function testIdenticalReRegistrationIsAccepted(): void
@@ -39,7 +53,7 @@ class ExtraPropertyRegistryTest extends TestCase
         $incoming = $this->definition();
         $registry = $this->buildRegistry(existing: $this->definition(), expectSave: true);
 
-        $this->assertTrue($registry->register($incoming));
+        $this->assertSame(1, $registry->register($incoming));
     }
 
     /**
@@ -49,7 +63,10 @@ class ExtraPropertyRegistryTest extends TestCase
     {
         $registry = $this->buildRegistry(existing: $existing, expectSave: false);
 
-        $this->assertFalse($registry->register($incoming));
+        $this->expectException(ExtraPropertyRegistryException::class);
+        $this->expectExceptionCode(ExtraPropertyRegistryException::DESTRUCTIVE_SCHEMA_CHANGE);
+
+        $registry->register($incoming);
     }
 
     public static function destructiveChangeProvider(): array
@@ -58,10 +75,6 @@ class ExtraPropertyRegistryTest extends TestCase
             'type change' => [
                 self::definition(type: ExtraPropertyType::STRING),
                 self::definition(type: ExtraPropertyType::INT),
-            ],
-            'scope change' => [
-                self::definition(scope: ExtraPropertyScope::COMMON),
-                self::definition(scope: ExtraPropertyScope::LANG),
             ],
             'string size decrease' => [
                 self::definition(size: 255),
@@ -87,6 +100,12 @@ class ExtraPropertyRegistryTest extends TestCase
                 self::definition(type: ExtraPropertyType::CHOICE, enumValues: ['a']),
                 self::definition(type: ExtraPropertyType::CHOICE, enumValues: null),
             ],
+            // A different explicit tableName would silently relocate storage to another
+            // {table}_extra, orphaning every stored value.
+            'physical table relocation' => [
+                self::definition(),
+                self::definition(tableName: 'supplier'),
+            ],
         ];
     }
 
@@ -97,7 +116,7 @@ class ExtraPropertyRegistryTest extends TestCase
     {
         $registry = $this->buildRegistry(existing: $existing, expectSave: true);
 
-        $this->assertTrue($registry->register($incoming));
+        $this->assertSame(1, $registry->register($incoming));
     }
 
     public static function appliableChangeProvider(): array
@@ -143,24 +162,314 @@ class ExtraPropertyRegistryTest extends TestCase
         // null and 255 are the same effective varchar length: not blocked.
         $registry = $this->buildRegistry(existing: $this->definition(size: null), expectSave: true);
 
-        $this->assertTrue($registry->register($this->definition(size: 255)));
+        $this->assertSame(1, $registry->register($this->definition(size: 255)));
     }
 
     public function testScopeConflictWithAnotherScopeIsRefused(): void
     {
-        // Same (entity, module, property) registered under another scope: refused before save.
+        // Same (entity, module, property) registered under another scope: refused before any write.
         $registry = $this->buildRegistry(existing: $this->definition(scope: ExtraPropertyScope::SHOP), expectSave: false);
 
-        $this->assertFalse($registry->register($this->definition(scope: ExtraPropertyScope::COMMON)));
+        $this->expectException(ExtraPropertyRegistryException::class);
+        $this->expectExceptionCode(ExtraPropertyRegistryException::SCOPE_CONFLICT);
+
+        $registry->register($this->definition(scope: ExtraPropertyScope::COMMON));
+    }
+
+    public function testInvalidFormOptionsAreRejectedBeforeSave(): void
+    {
+        $registry = $this->buildRegistry(existing: null, expectSave: false);
+
+        try {
+            $registry->register($this->definition(formOptions: ['not_a_real_option' => true]));
+            $this->fail('An ExtraPropertyRegistryException should have been thrown.');
+        } catch (ExtraPropertyRegistryException $exception) {
+            $this->assertSame(ExtraPropertyRegistryException::INVALID_FORM_OPTIONS, $exception->getCode());
+            $this->assertStringContainsString('not_a_real_option', $exception->getMessage());
+            // The individual validation errors stay available as a list for form consumers.
+            $this->assertNotSame([], $exception->getErrors());
+            $this->assertStringContainsString('not_a_real_option', $exception->getErrors()[0]);
+        }
+    }
+
+    public function testInvalidFormTypeIsRejectedBeforeSave(): void
+    {
+        $registry = $this->buildRegistry(existing: null, expectSave: false);
+
+        $this->expectException(ExtraPropertyRegistryException::class);
+        $this->expectExceptionCode(ExtraPropertyRegistryException::INVALID_FORM_OPTIONS);
+        $this->expectExceptionMessage('is not a Symfony form type');
+
+        $registry->register($this->definition(formType: 'Vendor\Unknown\FancyType'));
+    }
+
+    public function testValidFormOptionsAreAccepted(): void
+    {
+        $registry = $this->buildRegistry(existing: null, expectSave: true);
+
+        $this->assertSame(1, $registry->register($this->definition(formOptions: ['attr' => ['class' => 'custom-class']])));
+    }
+
+    public function testUnknownShopIdsInTheAssociationAreRejectedBeforeAnyWrite(): void
+    {
+        // The association rows carry no FK: an unknown id would be stored silently and make
+        // the definition invisible on every real shop, so it is refused before any DDL
+        // (expectSave: false also asserts ensureExtraTableAndColumn() is never reached).
+        $registry = $this->buildRegistry(existing: null, expectSave: false);
+
+        $this->expectException(ExtraPropertyRegistryException::class);
+        $this->expectExceptionCode(ExtraPropertyRegistryException::UNKNOWN_SHOP);
+        $this->expectExceptionMessage('unknown shop id(s) 99');
+
+        $registry->register($this->definition(associatedShopIds: [2, 99]));
+    }
+
+    public function testExistingShopIdsInTheAssociationAreAccepted(): void
+    {
+        $registry = $this->buildRegistry(existing: null, expectSave: true);
+
+        $this->assertSame(1, $registry->register($this->definition(associatedShopIds: [1, 4])));
+    }
+
+    public function testTheEmptyClearMarkerAssociationNeedsNoShopCheck(): void
+    {
+        // [] means "revert to the fallback": it names no shop id, so nothing to validate.
+        $registry = $this->buildRegistry(existing: null, expectSave: true);
+
+        $this->assertSame(1, $registry->register($this->definition(associatedShopIds: [])));
+    }
+
+    public function testDdlRunsBeforeSave(): void
+    {
+        $ddlDone = false;
+
+        $schemaManager = $this->createMock(ExtraPropertySchemaManagerInterface::class);
+        $schemaManager->expects($this->once())
+            ->method('ensureExtraTableAndColumn')
+            ->willReturnCallback(function () use (&$ddlDone): bool {
+                $ddlDone = true;
+
+                return true;
+            });
+
+        $writeRepository = $this->createMock(ExtraPropertyDefinitionWriterInterface::class);
+        $writeRepository->expects($this->once())
+            ->method('save')
+            ->willReturnCallback(function () use (&$ddlDone): int {
+                $this->assertTrue($ddlDone, 'save() must only run after the DDL succeeded');
+
+                return 1;
+            });
+
+        $registry = $this->createRegistry(existing: null, writeRepository: $writeRepository, schemaManager: $schemaManager);
+
+        $this->assertSame(1, $registry->register($this->definition()));
+    }
+
+    /**
+     * The reported orphan-definition bug, pinned at unit level: a schema failure on a
+     * CREATION must escape before any row is persisted.
+     */
+    public function testSchemaFailureOnCreationNeverSaves(): void
+    {
+        $registry = $this->createRegistry(
+            existing: null,
+            writeRepository: $this->neverSavingWriter(),
+            schemaManager: $this->throwingSchemaManager(new ExtraPropertyRegistryException('The base table "ps_demo" does not exist.', ExtraPropertyRegistryException::BASE_TABLE_NOT_FOUND)),
+        );
+
+        $this->expectException(ExtraPropertyRegistryException::class);
+        $this->expectExceptionCode(ExtraPropertyRegistryException::BASE_TABLE_NOT_FOUND);
+
+        $registry->register($this->definition());
+    }
+
+    public function testSchemaFailureOnUpdateNeverSaves(): void
+    {
+        $registry = $this->createRegistry(
+            existing: $this->definition(),
+            writeRepository: $this->neverSavingWriter(),
+            schemaManager: $this->throwingSchemaManager(new ExtraPropertyRegistryException('The base table "ps_demo" does not exist.', ExtraPropertyRegistryException::BASE_TABLE_NOT_FOUND)),
+        );
+
+        $this->expectException(ExtraPropertyRegistryException::class);
+        $this->expectExceptionCode(ExtraPropertyRegistryException::BASE_TABLE_NOT_FOUND);
+
+        $registry->register($this->definition());
+    }
+
+    public function testUnexpectedSchemaFailureIsWrappedWithPrevious(): void
+    {
+        $driverFailure = new RuntimeException('server has gone away');
+        $registry = $this->createRegistry(
+            existing: null,
+            writeRepository: $this->neverSavingWriter(),
+            schemaManager: $this->throwingSchemaManager($driverFailure),
+        );
+
+        try {
+            $registry->register($this->definition());
+            $this->fail('An ExtraPropertyRegistryException should have been thrown.');
+        } catch (ExtraPropertyRegistryException $exception) {
+            $this->assertSame(ExtraPropertyRegistryException::SCHEMA_FAILURE, $exception->getCode());
+            $this->assertSame($driverFailure, $exception->getPrevious());
+            $this->assertStringContainsString('server has gone away', $exception->getMessage());
+        }
+    }
+
+    public function testSaveFailureOnCreationDropsTheColumnItAdded(): void
+    {
+        $schemaManager = $this->createMock(ExtraPropertySchemaManagerInterface::class);
+        $schemaManager->method('ensureExtraTableAndColumn')->willReturn(true);
+        $schemaManager->expects($this->once())->method('dropExtraColumnIfExists');
+
+        $registry = $this->createRegistry(existing: null, writeRepository: $this->failingWriter(), schemaManager: $schemaManager);
+
+        $this->expectException(ExtraPropertyRegistryException::class);
+        $this->expectExceptionCode(ExtraPropertyRegistryException::PERSISTENCE_FAILURE);
+
+        $registry->register($this->definition());
+    }
+
+    public function testSaveFailureOnCreationKeepsAPreExistingColumn(): void
+    {
+        // The column existed before this call (ensure... returned false): a leftover of
+        // unregister(dropColumn: false) may still hold data, it must never be dropped.
+        $schemaManager = $this->createMock(ExtraPropertySchemaManagerInterface::class);
+        $schemaManager->method('ensureExtraTableAndColumn')->willReturn(false);
+        $schemaManager->expects($this->never())->method('dropExtraColumnIfExists');
+
+        $registry = $this->createRegistry(existing: null, writeRepository: $this->failingWriter(), schemaManager: $schemaManager);
+
+        $this->expectException(ExtraPropertyRegistryException::class);
+        $this->expectExceptionCode(ExtraPropertyRegistryException::PERSISTENCE_FAILURE);
+
+        $registry->register($this->definition());
+    }
+
+    public function testSaveFailureOnUpdateLeavesTheColumnInPlace(): void
+    {
+        $schemaManager = $this->createMock(ExtraPropertySchemaManagerInterface::class);
+        $schemaManager->method('ensureExtraTableAndColumn')->willReturn(true);
+        $schemaManager->expects($this->never())->method('dropExtraColumnIfExists');
+
+        $registry = $this->createRegistry(existing: $this->definition(), writeRepository: $this->failingWriter(), schemaManager: $schemaManager);
+
+        $this->expectException(ExtraPropertyRegistryException::class);
+        $this->expectExceptionCode(ExtraPropertyRegistryException::PERSISTENCE_FAILURE);
+
+        $registry->register($this->definition());
+    }
+
+    public function testFailingCleanupStillThrowsThePersistenceFailure(): void
+    {
+        $schemaManager = $this->createMock(ExtraPropertySchemaManagerInterface::class);
+        $schemaManager->method('ensureExtraTableAndColumn')->willReturn(true);
+        $schemaManager->expects($this->once())
+            ->method('dropExtraColumnIfExists')
+            ->willThrowException(new RuntimeException('drop failed too'));
+
+        $registry = $this->createRegistry(existing: null, writeRepository: $this->failingWriter(), schemaManager: $schemaManager);
+
+        $this->expectException(ExtraPropertyRegistryException::class);
+        $this->expectExceptionCode(ExtraPropertyRegistryException::PERSISTENCE_FAILURE);
+
+        $registry->register($this->definition());
+    }
+
+    public function testUnregisterUnknownDefinitionIsANoOp(): void
+    {
+        $writeRepository = $this->createMock(ExtraPropertyDefinitionWriterInterface::class);
+        $writeRepository->expects($this->never())->method('deleteByDefinition');
+
+        $schemaManager = $this->createMock(ExtraPropertySchemaManagerInterface::class);
+        $schemaManager->expects($this->never())->method('dropExtraColumnIfExists');
+
+        $registry = $this->createRegistry(existing: null, writeRepository: $writeRepository, schemaManager: $schemaManager);
+
+        $registry->unregister($this->definition(), true);
+    }
+
+    public function testUnregisterDeletesTheRowBeforeDroppingTheColumn(): void
+    {
+        $rowDeleted = false;
+
+        $writeRepository = $this->createMock(ExtraPropertyDefinitionWriterInterface::class);
+        $writeRepository->expects($this->once())
+            ->method('deleteByDefinition')
+            ->willReturnCallback(function () use (&$rowDeleted): bool {
+                $rowDeleted = true;
+
+                return true;
+            });
+
+        $schemaManager = $this->createMock(ExtraPropertySchemaManagerInterface::class);
+        $schemaManager->expects($this->once())
+            ->method('dropExtraColumnIfExists')
+            ->willReturnCallback(function () use (&$rowDeleted): void {
+                $this->assertTrue($rowDeleted, 'the column drop must only run after the definition row is deleted');
+            });
+
+        $registry = $this->createRegistry(existing: $this->definition(), writeRepository: $writeRepository, schemaManager: $schemaManager);
+
+        $registry->unregister($this->definition(), true);
+    }
+
+    public function testUnregisterRowDeleteFailureThrowsAndSkipsTheDrop(): void
+    {
+        $writeRepository = $this->createMock(ExtraPropertyDefinitionWriterInterface::class);
+        $writeRepository->method('deleteByDefinition')->willReturn(false);
+
+        $schemaManager = $this->createMock(ExtraPropertySchemaManagerInterface::class);
+        $schemaManager->expects($this->never())->method('dropExtraColumnIfExists');
+
+        $registry = $this->createRegistry(existing: $this->definition(), writeRepository: $writeRepository, schemaManager: $schemaManager);
+
+        $this->expectException(ExtraPropertyRegistryException::class);
+        $this->expectExceptionCode(ExtraPropertyRegistryException::PERSISTENCE_FAILURE);
+
+        $registry->unregister($this->definition(), true);
+    }
+
+    public function testUnregisterDropFailureThrowsSchemaExceptionWithTheRowAlreadyDeleted(): void
+    {
+        $dropFailure = new RuntimeException('lock wait timeout');
+
+        $writeRepository = $this->createMock(ExtraPropertyDefinitionWriterInterface::class);
+        $writeRepository->expects($this->once())->method('deleteByDefinition')->willReturn(true);
+
+        $schemaManager = $this->createMock(ExtraPropertySchemaManagerInterface::class);
+        $schemaManager->method('dropExtraColumnIfExists')->willThrowException($dropFailure);
+
+        $registry = $this->createRegistry(existing: $this->definition(), writeRepository: $writeRepository, schemaManager: $schemaManager);
+
+        try {
+            $registry->unregister($this->definition(), true);
+            $this->fail('An ExtraPropertyRegistryException should have been thrown.');
+        } catch (ExtraPropertyRegistryException $exception) {
+            $this->assertSame(ExtraPropertyRegistryException::SCHEMA_FAILURE, $exception->getCode());
+            $this->assertSame($dropFailure, $exception->getPrevious());
+            $this->assertStringContainsString('left in place', $exception->getMessage());
+        }
+    }
+
+    public function testUnregisterWithoutDropColumnNeverTouchesTheSchema(): void
+    {
+        $writeRepository = $this->createMock(ExtraPropertyDefinitionWriterInterface::class);
+        $writeRepository->expects($this->once())->method('deleteByDefinition')->willReturn(true);
+
+        $schemaManager = $this->createMock(ExtraPropertySchemaManagerInterface::class);
+        $schemaManager->expects($this->never())->method('dropExtraColumnIfExists');
+
+        $registry = $this->createRegistry(existing: $this->definition(), writeRepository: $writeRepository, schemaManager: $schemaManager);
+
+        $registry->unregister($this->definition(), false);
     }
 
     private function buildRegistry(
         ?ExtraPropertyDefinition $existing,
         bool $expectSave,
     ): ExtraPropertyRegistry {
-        $readRepository = $this->createMock(ExtraPropertyDefinitionRepositoryInterface::class);
-        $readRepository->method('findDefinitionByModuleAndField')->willReturn($existing);
-
         $writeRepository = $this->createMock(ExtraPropertyDefinitionWriterInterface::class);
         $writeRepository->expects($expectSave ? $this->once() : $this->never())
             ->method('save')
@@ -168,14 +477,67 @@ class ExtraPropertyRegistryTest extends TestCase
 
         $schemaManager = $this->createMock(ExtraPropertySchemaManagerInterface::class);
         $schemaManager->expects($expectSave ? $this->once() : $this->never())
-            ->method('ensureExtraTableAndColumn');
+            ->method('ensureExtraTableAndColumn')
+            ->willReturn(true);
+
+        return $this->createRegistry($existing, $writeRepository, $schemaManager);
+    }
+
+    private function createRegistry(
+        ?ExtraPropertyDefinition $existing,
+        ExtraPropertyDefinitionWriterInterface&MockObject $writeRepository,
+        ExtraPropertySchemaManagerInterface&MockObject $schemaManager,
+    ): ExtraPropertyRegistry {
+        $readRepository = $this->createMock(ExtraPropertyDefinitionRepositoryInterface::class);
+        $readRepository->method('findDefinitionByModuleAndField')->willReturn($existing);
+        // The cross-entity storage guard scans the whole registry on new registrations.
+        $readRepository->method('getAllDefinitions')->willReturn(new ExtraPropertyDefinitionCollection(array_filter([$existing])));
+
+        // The stubbed installation has shops 1 to 4 (shop association existence check).
+        $shopRepository = $this->createMock(ShopRepository::class);
+        $shopRepository->method('getAllShopIds')->willReturn([1, 2, 3, 4]);
 
         return new ExtraPropertyRegistry(
             $readRepository,
             $writeRepository,
             $schemaManager,
             new NullLogger(),
+            new FormOptionsValidator(
+                Forms::createFormFactoryBuilder()
+                    // The validator's option merge carries 'constraints', defined by this extension.
+                    ->addExtension(new ValidatorExtension(Validation::createValidator()))
+                    ->getFormFactory(),
+                new ExtraPropertyFormTypeMap()
+            ),
+            $shopRepository,
         );
+    }
+
+    private function neverSavingWriter(): ExtraPropertyDefinitionWriterInterface&MockObject
+    {
+        $writeRepository = $this->createMock(ExtraPropertyDefinitionWriterInterface::class);
+        $writeRepository->expects($this->never())->method('save');
+
+        return $writeRepository;
+    }
+
+    private function failingWriter(): ExtraPropertyDefinitionWriterInterface&MockObject
+    {
+        $writeRepository = $this->createMock(ExtraPropertyDefinitionWriterInterface::class);
+        $writeRepository->expects($this->once())->method('save')->willReturn(false);
+
+        return $writeRepository;
+    }
+
+    private function throwingSchemaManager(Throwable $failure): ExtraPropertySchemaManagerInterface&MockObject
+    {
+        $schemaManager = $this->createMock(ExtraPropertySchemaManagerInterface::class);
+        $schemaManager->expects($this->once())
+            ->method('ensureExtraTableAndColumn')
+            ->willThrowException($failure);
+        $schemaManager->expects($this->never())->method('dropExtraColumnIfExists');
+
+        return $schemaManager;
     }
 
     private static function definition(
@@ -185,6 +547,10 @@ class ExtraPropertyRegistryTest extends TestCase
         bool $nullable = true,
         ?array $enumValues = null,
         int|float|string|bool|null $defaultValue = null,
+        ?string $formType = null,
+        ?array $formOptions = null,
+        ?array $associatedShopIds = null,
+        ?string $tableName = null,
     ): ExtraPropertyDefinition {
         return new ExtraPropertyDefinition(
             entityName: 'product',
@@ -196,6 +562,10 @@ class ExtraPropertyRegistryTest extends TestCase
             defaultValue: $defaultValue,
             nullable: $nullable,
             size: $size,
+            formType: $formType,
+            formOptions: $formOptions,
+            associatedShopIds: $associatedShopIds,
+            tableName: $tableName,
         );
     }
 }

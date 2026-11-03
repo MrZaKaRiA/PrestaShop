@@ -463,14 +463,6 @@ class FrontControllerCore extends Controller
             $this->context->cart->checkAndUpdateAddresses();
         }
 
-        /*
-         * We also need to run automatic cart rule actions.
-         * autoAddToCart is required to automatically assigning newly created cart rules with no code (automatic).
-         * autoRemoveFromCart is needed to verify, if the cart rules already in a cart are still valid.
-         */
-        CartRule::autoRemoveFromCart($this->context);
-        CartRule::autoAddToCart($this->context);
-
         $this->context->smarty->assign('request_uri', Tools::safeOutput(urldecode($_SERVER['REQUEST_URI'])));
 
         // Automatically redirect to the canonical URL if needed
@@ -488,6 +480,17 @@ class FrontControllerCore extends Controller
             $infos = Address::getCountryAndState((int) $cart->{Configuration::get('PS_TAX_ADDRESS_TYPE')});
             $this->context->country = new Country((int) $infos['id_country']);
         }
+
+        /*
+         * We also need to run automatic cart rule actions.
+         * autoAddToCart is required to automatically assigning newly created cart rules with no code (automatic).
+         * autoRemoveFromCart is needed to verify, if the cart rules already in a cart are still valid.
+         *
+         * These calls must be here, after context country initialization. Inside these CartRule methods, $cart->getProducts is called
+         * and cached for later use. If the context country is not set 100% correctly before these calls, the cart data may be partial or incorrect.
+         */
+        CartRule::autoRemoveFromCart($this->context);
+        CartRule::autoAddToCart($this->context);
 
         if (!Tools::isPHPCLI()) {
             $this->displayMaintenancePage();
@@ -540,26 +543,29 @@ class FrontControllerCore extends Controller
             ]
         );
 
-        $templateVars = [
-            'cart' => $this->cart_presenter->present($cart, true),
-            'currency' => $this->getTemplateVarCurrency(),
-            'customer' => $this->getTemplateVarCustomer(),
-            'country' => $this->objectPresenter->present($this->context->country),
-            'language' => $this->objectPresenter->present($this->context->language),
-            'page' => $this->getTemplateVarPage(),
-            'shop' => $this->getTemplateVarShop(),
-            'core_js_public_path' => $this->getCoreJsPublicPath(),
-            'urls' => $this->getTemplateVarUrls(),
-            'configuration' => $this->getTemplateVarConfiguration(),
-            'field_required' => $this->context->customer->validateFieldsRequiredDatabase(),
-            'breadcrumb' => $this->getBreadcrumb(),
-            'structured_data' => $this->getStructuredData(),
-            'link' => $this->context->link,
-            'time' => time(),
-            'static_token' => Tools::getToken(false),
-            'token' => Tools::getToken(),
-            'debug' => _PS_MODE_DEV_,
-        ];
+        $templateVars = array_merge(
+            [
+                'cart' => $this->cart_presenter->present($cart, true),
+                'currency' => $this->getTemplateVarCurrency(),
+                'customer' => $this->getTemplateVarCustomer(),
+                'country' => $this->objectPresenter->present($this->context->country),
+                'language' => $this->objectPresenter->present($this->context->language),
+                'page' => $this->getTemplateVarPage(),
+                'shop' => $this->getTemplateVarShop(),
+                'core_js_public_path' => $this->getCoreJsPublicPath(),
+                'urls' => $this->getTemplateVarUrls(),
+                'configuration' => $this->getTemplateVarConfiguration(),
+                'field_required' => $this->context->customer->validateFieldsRequiredDatabase(),
+                'breadcrumb' => $this->getBreadcrumb(),
+                'structured_data' => $this->getStructuredData(),
+                'link' => $this->context->link,
+                'time' => time(),
+                'static_token' => Tools::getToken(false),
+                'token' => Tools::getToken(),
+                'debug' => _PS_MODE_DEV_,
+            ],
+            $templateVars
+        );
 
         // An array [module_name => module_output] will be returned
         $modulesVariables = Hook::exec(
@@ -581,10 +587,8 @@ class FrontControllerCore extends Controller
             )
         );
 
-        if (is_array($modulesVariables)) {
-            foreach ($modulesVariables as $moduleName => $variables) {
-                $templateVars['modules'][$moduleName] = $variables;
-            }
+        foreach ($modulesVariables as $moduleName => $variables) {
+            $templateVars['modules'][$moduleName] = $variables;
         }
 
         $this->context->smarty->assign($templateVars);
@@ -1916,16 +1920,26 @@ class FrontControllerCore extends Controller
      */
     public function getStructuredData()
     {
-        // Basic organization and webpage
+        // Basic organization, website and webpage
         $structuredData = [
             'organization' => [
                 '@context' => 'https://schema.org',
                 '@type' => 'Organization',
-                'name' => Configuration::get('PS_SHOP_NAME'),
+                'name' => $this->context->shop->name,
                 'url' => $this->getTemplateVarUrls()['pages']['index'],
-                'logo' => [
-                    '@type' => 'ImageObject',
-                    'url' => $this->getShopLogo()['src'],
+            ],
+            'website' => [
+                '@context' => 'https://schema.org',
+                '@type' => 'WebSite',
+                'url' => $this->getTemplateVarUrls()['pages']['index'],
+                'name' => $this->context->shop->name,
+                'potentialAction' => [
+                    '@type' => 'SearchAction',
+                    'target' => [
+                        '@type' => 'EntryPoint',
+                        'urlTemplate' => $this->context->link->getPageLink('search') . '?s={search_term_string}',
+                    ],
+                    'query-input' => 'required name=search_term_string',
                 ],
             ],
             'webpage' => [
@@ -1934,16 +1948,59 @@ class FrontControllerCore extends Controller
                 'isPartOf' => [
                     '@type' => 'WebSite',
                     'url' => $this->getTemplateVarUrls()['pages']['index'],
-                    'name' => Configuration::get('PS_SHOP_NAME'),
+                    'name' => $this->context->shop->name,
                 ],
                 'name' => $this->getTemplateVarPage()['meta']['title'],
                 'url' => $this->getTemplateVarUrls()['current_url'],
             ],
         ];
 
-        // Add breadcrumbs
+        // Add configured contact details to the organization
+        $phone = Configuration::get('PS_SHOP_PHONE');
+        if (!empty($phone)) {
+            $structuredData['organization']['telephone'] = $phone;
+        }
+        $email = Configuration::get('PS_SHOP_EMAIL');
+        if (!empty($email)) {
+            $structuredData['organization']['email'] = $email;
+        }
+
+        // Add the configured address to the organization
+        $shopAddress = $this->context->shop->getAddress();
+        $address = [];
+        if (!empty($shopAddress->address1) || !empty($shopAddress->address2)) {
+            $address['streetAddress'] = implode(', ', array_filter([$shopAddress->address1, $shopAddress->address2]));
+        }
+        if (!empty($shopAddress->city)) {
+            $address['addressLocality'] = $shopAddress->city;
+        }
+        if (!empty($shopAddress->id_state)) {
+            $address['addressRegion'] = (new State($shopAddress->id_state))->name;
+        }
+        if (!empty($shopAddress->postcode)) {
+            $address['postalCode'] = $shopAddress->postcode;
+        }
+        if (!empty($shopAddress->id_country)) {
+            $address['addressCountry'] = (new Country($shopAddress->id_country))->iso_code;
+        }
+        if (!empty($address)) {
+            $structuredData['organization']['address'] = array_merge(['@type' => 'PostalAddress'], $address);
+        }
+
+        // Add logo to organization if available
+        $logo = $this->getShopLogo();
+        if (!empty($logo['src'])) {
+            $structuredData['organization']['logo'] = [
+                '@type' => 'ImageObject',
+                'url' => $logo['src'],
+                'width' => $logo['width'],
+                'height' => $logo['height'],
+            ];
+        }
+
+        // Add breadcrumbs, if at least 2 links are present (home + at least one other)
         $breadcrumbLinks = $this->getBreadcrumbLinks();
-        if (!empty($breadcrumbLinks['links'][0])) {
+        if (!empty($breadcrumbLinks['links'][1])) {
             $breadcrumbStructuredData = [
                 '@context' => 'https://schema.org',
                 '@type' => 'BreadcrumbList',
@@ -2102,6 +2159,20 @@ class FrontControllerCore extends Controller
         }
 
         return $templateContent;
+    }
+
+    /**
+     * Renders a template only if it can be resolved by the current theme.
+     */
+    protected function renderOptionalTemplate(string $template): string
+    {
+        try {
+            $this->getTemplateFile($template);
+        } catch (PrestaShopException $e) {
+            return '';
+        }
+
+        return $this->render($template);
     }
 
     protected function getTranslator()

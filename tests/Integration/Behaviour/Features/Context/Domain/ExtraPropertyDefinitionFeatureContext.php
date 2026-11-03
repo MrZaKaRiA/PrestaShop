@@ -1,0 +1,534 @@
+<?php
+
+/**
+ * For the full copyright and license information, please view the
+ * docs/licenses/LICENSE.txt file that was distributed with this source code.
+ */
+
+declare(strict_types=1);
+
+namespace Tests\Integration\Behaviour\Features\Context\Domain;
+
+use Behat\Gherkin\Node\PyStringNode;
+use Behat\Gherkin\Node\TableNode;
+use Exception;
+use PrestaShop\PrestaShop\Core\Domain\ExtraProperty\Command\AddExtraPropertyDefinitionCommand;
+use PrestaShop\PrestaShop\Core\Domain\ExtraProperty\Command\BulkDeleteExtraPropertyDefinitionCommand;
+use PrestaShop\PrestaShop\Core\Domain\ExtraProperty\Command\DeleteExtraPropertyDefinitionCommand;
+use PrestaShop\PrestaShop\Core\Domain\ExtraProperty\Command\UpdateExtraPropertyDefinitionCommand;
+use PrestaShop\PrestaShop\Core\Domain\ExtraProperty\Exception\BulkExtraPropertyException;
+use PrestaShop\PrestaShop\Core\Domain\ExtraProperty\Exception\ExtraPropertyConstraintException;
+use PrestaShop\PrestaShop\Core\Domain\ExtraProperty\Exception\ExtraPropertyDefinitionNotFoundException;
+use PrestaShop\PrestaShop\Core\Domain\ExtraProperty\Exception\ExtraPropertyRegistrationFailureException;
+use PrestaShop\PrestaShop\Core\Domain\ExtraProperty\Exception\ProtectedModuleExtraPropertyDefinitionException;
+use PrestaShop\PrestaShop\Core\Domain\ExtraProperty\Query\GetExtraPropertyDefinitionForEditing;
+use PrestaShop\PrestaShop\Core\Domain\ExtraProperty\QueryResult\EditableExtraPropertyDefinition;
+use PrestaShop\PrestaShop\Core\Domain\ExtraProperty\ValueObject\ExtraPropertyDefinitionId;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Constraint\ExtraPropertyConstraintParser;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Constraint\ExtraPropertyConstraintRenderer;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinition;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionRepositoryInterface;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyRegistryInterface;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyScope;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertySqlIndex;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyType;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Value\ExtraPropertyValueCaster;
+use RuntimeException;
+use Tests\Integration\Behaviour\Features\Context\SharedStorage;
+use Tests\Integration\Behaviour\Features\Context\Util\NoExceptionAlthoughExpectedException;
+use Tests\Resources\Resetter\ExtraPropertyResetter;
+
+/**
+ * Covers the BO extra property definition registry management: AddExtraPropertyDefinitionCommand,
+ * UpdateExtraPropertyDefinitionCommand, DeleteExtraPropertyDefinitionCommand,
+ * BulkDeleteExtraPropertyDefinitionCommand and GetExtraPropertyDefinitionForEditing.
+ */
+class ExtraPropertyDefinitionFeatureContext extends AbstractDomainFeatureContext
+{
+    /**
+     * @BeforeFeature @reset-extra-properties-before-feature
+     */
+    public static function resetExtraPropertiesBeforeFeature(): void
+    {
+        ExtraPropertyResetter::resetExtraProperties();
+    }
+
+    /**
+     * Most scenarios register definitions they never delete: reset the registry (rows, storage
+     * tables, cached definitions) so nothing leaks into whatever runs next on the same database —
+     * the PHPUnit integration suite reads the registry live.
+     *
+     * @AfterFeature @reset-extra-properties-after-feature
+     */
+    public static function resetExtraPropertiesAfterFeature(): void
+    {
+        ExtraPropertyResetter::resetExtraProperties();
+    }
+
+    /**
+     * @When I add an extra property definition :reference with following properties:
+     */
+    public function addExtraPropertyDefinition(string $reference, TableNode $table): void
+    {
+        $data = $table->getRowsHash();
+
+        // The command parses the constraints DSL itself, so building it is part of the tested action.
+        try {
+            $command = new AddExtraPropertyDefinitionCommand(
+                entityName: $data['entity_name'],
+                propertyName: $data['property_name'],
+                type: ExtraPropertyType::from($data['type'] ?? ExtraPropertyType::STRING->value),
+                scope: ExtraPropertyScope::from($data['scope'] ?? ExtraPropertyScope::COMMON->value),
+                sqlIndex: ExtraPropertySqlIndex::from($data['sql_index'] ?? ExtraPropertySqlIndex::NONE->value),
+                displayFront: filter_var($data['display_front'] ?? false, FILTER_VALIDATE_BOOL),
+                required: filter_var($data['required'] ?? false, FILTER_VALIDATE_BOOL),
+                nullable: filter_var($data['nullable'] ?? true, FILTER_VALIDATE_BOOL),
+                size: isset($data['size']) ? (int) $data['size'] : null,
+                defaultValue: $data['default_value'] ?? null,
+                enumValues: isset($data['enum_values']) ? explode(',', $data['enum_values']) : null,
+                labelWording: $data['label_wording'] ?? null,
+                labelDomain: $data['label_domain'] ?? null,
+                descriptionWording: null,
+                descriptionDomain: null,
+                constraints: $data['constraints'] ?? null,
+                formType: null,
+                formOptions: null,
+                associatedForms: isset($data['associated_forms']) ? explode(',', $data['associated_forms']) : null,
+                associatedGrids: isset($data['associated_grids']) ? explode(',', $data['associated_grids']) : null,
+                associatedApis: isset($data['associated_apis']) ? explode(',', $data['associated_apis']) : null,
+                associatedShopIds: isset($data['associated_shop_ids']) ? $this->referencesToIds($data['associated_shop_ids']) : null,
+            );
+
+            /** @var ExtraPropertyDefinitionId $id */
+            $id = $this->getCommandBus()->handle($command);
+            SharedStorage::getStorage()->set($reference, $id->getValue());
+        } catch (Exception $e) {
+            $this->setLastException($e);
+        }
+    }
+
+    /**
+     * @Given a module-owned extra property definition :reference exists for entity :entityName named :propertyName owned by module :moduleName
+     */
+    public function addModuleOwnedExtraPropertyDefinition(string $reference, string $entityName, string $propertyName, string $moduleName): void
+    {
+        $definition = new ExtraPropertyDefinition(
+            entityName: $entityName,
+            propertyName: $propertyName,
+            moduleName: $moduleName,
+        );
+
+        /** @var ExtraPropertyRegistryInterface $registry */
+        $registry = $this->getContainer()->get(ExtraPropertyRegistryInterface::class);
+        // register() throws on failure, which surfaces naturally as a fixture failure.
+        $id = $registry->register($definition);
+
+        SharedStorage::getStorage()->set($reference, $id);
+    }
+
+    /**
+     * @Given I define an uncreated extra property definition :reference
+     */
+    public function defineUncreatedExtraPropertyDefinition(string $reference): void
+    {
+        // No row in extra_property_definition will ever have this id: used to exercise the
+        // "not found" path for real (a SharedStorage lookup miss would throw a different,
+        // unrelated RuntimeException before the command/query is even dispatched).
+        SharedStorage::getStorage()->set($reference, 999999999);
+    }
+
+    /**
+     * @Given I define an uncreated shop :reference
+     */
+    public function defineUncreatedShop(string $reference): void
+    {
+        // Same trick as the uncreated definition above, for the shop existence assertion of
+        // the registry: no ps_shop row will ever have this id, so an association naming it
+        // must be rejected (UNKNOWN_SHOP) by the single definition write endpoint.
+        SharedStorage::getStorage()->set($reference, 999999999);
+    }
+
+    /**
+     * @When I edit extra property definition :reference with following properties:
+     */
+    public function editExtraPropertyDefinition(string $reference, TableNode $table): void
+    {
+        $command = new UpdateExtraPropertyDefinitionCommand($this->referenceToId($reference));
+        $data = $table->getRowsHash();
+
+        // setConstraints() parses the DSL itself, so the setters are part of the tested action.
+        try {
+            if (isset($data['display_front'])) {
+                $command->setDisplayFront(filter_var($data['display_front'], FILTER_VALIDATE_BOOL));
+            }
+            if (isset($data['required'])) {
+                $command->setRequired(filter_var($data['required'], FILTER_VALIDATE_BOOL));
+            }
+            if (isset($data['nullable'])) {
+                $command->setNullable(filter_var($data['nullable'], FILTER_VALIDATE_BOOL));
+            }
+            if (isset($data['size'])) {
+                $command->setSize((int) $data['size']);
+            }
+            if (isset($data['enum_values'])) {
+                $command->setEnumValues(explode(',', $data['enum_values']));
+            }
+            if (isset($data['sql_index'])) {
+                $command->setSqlIndex(ExtraPropertySqlIndex::from($data['sql_index']));
+            }
+            if (isset($data['label_wording'])) {
+                $command->setLabelWording($data['label_wording']);
+            }
+            if (isset($data['constraints'])) {
+                // An empty cell removes every constraint; an absent row leaves them untouched.
+                $command->setConstraints($data['constraints']);
+            }
+            if (isset($data['associated_forms'])) {
+                $command->setAssociatedForms(explode(',', $data['associated_forms']));
+            }
+            if (isset($data['associated_grids'])) {
+                $command->setAssociatedGrids(explode(',', $data['associated_grids']));
+            }
+            if (isset($data['associated_apis'])) {
+                $command->setAssociatedApis(explode(',', $data['associated_apis']));
+            }
+            if (isset($data['associated_shop_ids'])) {
+                // An empty cell means "revert to the fallback" ([]); an absent row leaves the
+                // stored association untouched (the setter is simply never called).
+                $command->setAssociatedShopIds($this->referencesToIds($data['associated_shop_ids']));
+            }
+
+            $this->getCommandBus()->handle($command);
+        } catch (Exception $e) {
+            $this->setLastException($e);
+        }
+    }
+
+    /**
+     * @When I delete extra property definition :reference
+     */
+    public function deleteExtraPropertyDefinition(string $reference): void
+    {
+        $this->doDeleteExtraPropertyDefinition($reference, false);
+    }
+
+    /**
+     * @When I delete extra property definition :reference and drop its column
+     */
+    public function deleteExtraPropertyDefinitionAndDropColumn(string $reference): void
+    {
+        $this->doDeleteExtraPropertyDefinition($reference, true);
+    }
+
+    private function doDeleteExtraPropertyDefinition(string $reference, bool $dropColumn): void
+    {
+        try {
+            $this->getCommandBus()->handle(new DeleteExtraPropertyDefinitionCommand($this->referenceToId($reference), $dropColumn));
+        } catch (Exception $e) {
+            $this->setLastException($e);
+        }
+    }
+
+    /**
+     * @When I bulk delete extra property definitions :references
+     */
+    public function bulkDeleteExtraPropertyDefinitions(string $references): void
+    {
+        $this->doBulkDeleteExtraPropertyDefinitions($references, false);
+    }
+
+    /**
+     * @When I bulk delete extra property definitions :references and drop their columns
+     */
+    public function bulkDeleteExtraPropertyDefinitionsAndDropColumns(string $references): void
+    {
+        $this->doBulkDeleteExtraPropertyDefinitions($references, true);
+    }
+
+    private function doBulkDeleteExtraPropertyDefinitions(string $references, bool $dropColumn): void
+    {
+        try {
+            $this->getCommandBus()->handle(new BulkDeleteExtraPropertyDefinitionCommand($this->referencesToIds($references), $dropColumn));
+        } catch (Exception $e) {
+            $this->setLastException($e);
+        }
+    }
+
+    /**
+     * Single assertion step covering every parameter of a definition, in the same table format
+     * as the creation/edit steps (the same table can be copy/pasted between action and
+     * assertion). Only the rows present in the table are checked, so a scenario can assert on
+     * just one or two fields after a partial edit.
+     *
+     * @Then extra property definition :reference should have the following parameters:
+     */
+    public function assertExtraPropertyDefinitionHasParameters(string $reference, TableNode $table): void
+    {
+        $definition = $this->getExtraPropertyDefinitionFromReference($reference);
+
+        foreach ($table->getRowsHash() as $field => $expected) {
+            $actual = $this->extractExtraPropertyDefinitionField($definition, $field);
+
+            if (in_array($field, ['nullable', 'display_front', 'required'], true)) {
+                $expected = filter_var($expected, FILTER_VALIDATE_BOOL) ? 'true' : 'false';
+            }
+            if ('associated_shop_ids' === $field) {
+                // Cells hold shop references, resolved to the ids the definition stores.
+                $expected = implode(',', $this->referencesToIds($expected));
+            }
+            if ('constraints' === $field) {
+                // Compared in canonical DSL form so a one-line cell matches the multi-line render
+                // of a composite and the ordering of named options is not a concern.
+                $expected = $this->canonicalConstraints($expected);
+            }
+
+            if ($actual !== $expected) {
+                throw new RuntimeException(sprintf(
+                    'Expected %s to be "%s" but got "%s" for extra property definition "%s".',
+                    $field,
+                    $expected,
+                    $actual,
+                    $reference
+                ));
+            }
+        }
+    }
+
+    /**
+     * Resolves one named parameter of a definition to its comma-joined / true|false string
+     * representation, so it can be compared directly against a Gherkin table cell.
+     */
+    private function extractExtraPropertyDefinitionField(EditableExtraPropertyDefinition $definition, string $field): string
+    {
+        return match ($field) {
+            'entity_name' => $definition->getEntityName(),
+            'property_name' => $definition->getPropertyName(),
+            'type' => $definition->getType()->value,
+            'scope' => $definition->getScope()->value,
+            'sql_index' => $definition->getSqlIndex()->value,
+            'nullable' => $definition->isNullable() ? 'true' : 'false',
+            'size' => null !== $definition->getSize() ? (string) $definition->getSize() : '',
+            // Typed scalar since the CQRS widening — stringified with the same canonical
+            // mapping as the registry ('1'/'0' for booleans) for Gherkin cell comparison.
+            'default_value' => ExtraPropertyValueCaster::castDefaultValueForDb($definition->getType(), $definition->getDefaultValue()) ?? '',
+            'enum_values' => implode(',', $definition->getEnumValues() ?? []),
+            'display_front' => $definition->isDisplayFront() ? 'true' : 'false',
+            'required' => $definition->isRequired() ? 'true' : 'false',
+            'label_wording' => $definition->getLabelWording() ?? '',
+            'constraints' => $definition->getConstraints() ?? '',
+            'associated_forms' => implode(',', $definition->getAssociatedForms() ?? []),
+            'associated_grids' => implode(',', $definition->getAssociatedGrids() ?? []),
+            'associated_apis' => implode(',', $definition->getAssociatedApis() ?? []),
+            'associated_shop_ids' => implode(',', $definition->getAssociatedShopIds() ?? []),
+            default => throw new RuntimeException(sprintf('Unknown extra property definition parameter "%s".', $field)),
+        };
+    }
+
+    /**
+     * The canonical render of a DSL cell: what the query result returns for the same constraints.
+     * An invalid cell is a scenario bug, not a "no constraints" expectation.
+     */
+    private function canonicalConstraints(string $dsl): string
+    {
+        $decoded = ExtraPropertyConstraintParser::parse($dsl);
+        if ($decoded->hasRejections()) {
+            throw new RuntimeException(sprintf(
+                'The expected constraints "%s" are not valid DSL: %s',
+                $dsl,
+                implode(' ', $decoded->getRejectionMessages())
+            ));
+        }
+
+        return ExtraPropertyConstraintRenderer::render($decoded->getConstraints()) ?? '';
+    }
+
+    /**
+     * Exact-text assertion on the stored/rendered DSL, for the scenarios documenting the canonical
+     * form itself (indentation, option ordering, Collection wrappers) — the table step above
+     * deliberately ignores those.
+     *
+     * @Then extra property definition :reference should have the following constraints:
+     */
+    public function assertExtraPropertyDefinitionConstraintsRender(string $reference, PyStringNode $expected): void
+    {
+        $actual = $this->getExtraPropertyDefinitionFromReference($reference)->getConstraints() ?? '';
+
+        if ($actual !== $expected->getRaw()) {
+            throw new RuntimeException(sprintf(
+                "Expected the constraints of extra property definition \"%s\" to read:\n%s\nbut got:\n%s",
+                $reference,
+                $expected->getRaw(),
+                $actual
+            ));
+        }
+    }
+
+    /**
+     * @Then extra property definition :reference should still exist
+     */
+    public function assertExtraPropertyDefinitionExists(string $reference): void
+    {
+        if (!$this->isFoundExtraPropertyDefinition($reference)) {
+            throw new NoExceptionAlthoughExpectedException(sprintf(
+                'Extra property definition "%s" does not exist, but it was expected to still exist.',
+                $reference
+            ));
+        }
+    }
+
+    /**
+     * @Then extra property definition :reference should no longer exist
+     */
+    public function assertExtraPropertyDefinitionDoesNotExist(string $reference): void
+    {
+        if ($this->isFoundExtraPropertyDefinition($reference)) {
+            throw new NoExceptionAlthoughExpectedException(sprintf(
+                'Extra property definition "%s" exists, but it was expected to be deleted.',
+                $reference
+            ));
+        }
+    }
+
+    /**
+     * @Then I should get an error that the extra property definition was not found
+     */
+    public function assertLastErrorIsNotFound(): void
+    {
+        $this->assertLastErrorIs(ExtraPropertyDefinitionNotFoundException::class);
+    }
+
+    /**
+     * @Then I should get an error that the extra property definition is protected by a module
+     */
+    public function assertLastErrorIsProtectedByModule(): void
+    {
+        $this->assertLastErrorIs(ProtectedModuleExtraPropertyDefinitionException::class);
+    }
+
+    /**
+     * @Then I should get an error registering the extra property definition
+     */
+    public function assertLastErrorIsRegistrationFailure(): void
+    {
+        $this->assertLastErrorIs(ExtraPropertyRegistrationFailureException::class);
+    }
+
+    /**
+     * @Then I should get an error that the entity table is missing
+     */
+    public function assertLastErrorIsRegistrationFailureForMissingBaseTable(): void
+    {
+        $this->assertLastErrorIs(ExtraPropertyRegistrationFailureException::class, ExtraPropertyRegistrationFailureException::BASE_TABLE_MISSING);
+    }
+
+    /**
+     * @Then I should get an error that the scope conflicts with an existing definition
+     */
+    public function assertLastErrorIsRegistrationFailureForScopeConflict(): void
+    {
+        $this->assertLastErrorIs(ExtraPropertyRegistrationFailureException::class, ExtraPropertyRegistrationFailureException::SCOPE_CONFLICT);
+    }
+
+    /**
+     * @Then I should get an error that the change is destructive
+     */
+    public function assertLastErrorIsRegistrationFailureForDestructiveChange(): void
+    {
+        $this->assertLastErrorIs(ExtraPropertyRegistrationFailureException::class, ExtraPropertyRegistrationFailureException::DESTRUCTIVE_CHANGE);
+    }
+
+    /**
+     * @Then I should get an error that the shop association contains an unknown shop
+     */
+    public function assertLastErrorIsRegistrationFailureForUnknownShop(): void
+    {
+        $this->assertLastErrorIs(ExtraPropertyRegistrationFailureException::class, ExtraPropertyRegistrationFailureException::UNKNOWN_SHOP);
+    }
+
+    /**
+     * @Then I should get an error that the default value is invalid
+     */
+    public function assertLastErrorIsRegistrationFailureForInvalidDefaultValue(): void
+    {
+        $this->assertLastErrorIs(ExtraPropertyRegistrationFailureException::class, ExtraPropertyRegistrationFailureException::INVALID_DEFAULT_VALUE);
+    }
+
+    /**
+     * The command itself refused the constraints DSL (unknown name, malformed token, unsupported
+     * option or value): nothing reached the registry.
+     *
+     * @Then I should get an error that the constraints are invalid
+     */
+    public function assertLastErrorIsInvalidConstraints(): void
+    {
+        $this->assertLastErrorIs(ExtraPropertyConstraintException::class, ExtraPropertyConstraintException::INVALID_CONSTRAINTS);
+    }
+
+    /**
+     * The constraints parsed, but the registry refused to store them: they would not survive the
+     * render/parse round-trip or carry an option the persisted format never accepts.
+     *
+     * @Then I should get an error that the constraints cannot be stored
+     */
+    public function assertLastErrorIsRegistrationFailureForInvalidConstraints(): void
+    {
+        $this->assertLastErrorIs(ExtraPropertyRegistrationFailureException::class, ExtraPropertyRegistrationFailureException::INVALID_CONSTRAINTS);
+    }
+
+    /**
+     * Non-existence check by name rather than by stored reference: when the creation itself
+     * failed, no id was ever stored in SharedStorage, so the reference-based steps cannot be
+     * used. BO-created definitions are core-owned, hence the null module name in the lookup.
+     *
+     * @Then no extra property definition should exist for entity :entityName and property :propertyName
+     */
+    public function assertNoExtraPropertyDefinitionExistsByName(string $entityName, string $propertyName): void
+    {
+        /** @var ExtraPropertyDefinitionRepositoryInterface $repository */
+        $repository = $this->getContainer()->get(ExtraPropertyDefinitionRepositoryInterface::class);
+
+        if (null !== $repository->findDefinitionByModuleAndField($entityName, null, $propertyName)) {
+            throw new RuntimeException(sprintf(
+                'An extra property definition exists for entity "%s" and property "%s", but none was expected.',
+                $entityName,
+                $propertyName
+            ));
+        }
+    }
+
+    /**
+     * @Then the bulk deletion should report :count skipped definitions
+     */
+    public function assertBulkDeletionSkippedCount(int $count): void
+    {
+        /** @var BulkExtraPropertyException $exception */
+        $exception = $this->assertLastErrorIs(BulkExtraPropertyException::class);
+
+        if (count($exception->getExceptions()) !== $count) {
+            throw new RuntimeException(sprintf(
+                'Expected %d skipped definition(s) in the bulk deletion, got %d.',
+                $count,
+                count($exception->getExceptions())
+            ));
+        }
+    }
+
+    private function getExtraPropertyDefinitionFromReference(string $reference): EditableExtraPropertyDefinition
+    {
+        /** @var EditableExtraPropertyDefinition $definition */
+        $definition = $this->getQueryBus()->handle(new GetExtraPropertyDefinitionForEditing($this->referenceToId($reference)));
+
+        return $definition;
+    }
+
+    private function isFoundExtraPropertyDefinition(string $reference): bool
+    {
+        try {
+            $this->getExtraPropertyDefinitionFromReference($reference);
+
+            return true;
+        } catch (ExtraPropertyDefinitionNotFoundException) {
+            return false;
+        }
+    }
+}

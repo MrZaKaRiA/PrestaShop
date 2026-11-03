@@ -166,7 +166,7 @@ class OrderController extends PrestaShopAdminController
                 'help_link' => $this->generateSidebarLink($request->attributes->get('_legacy_controller')),
                 'enableSidebar' => true,
                 'changeOrderStatusesForm' => $changeOrderStatusesForm->createView(),
-                'orderKpi' => $orderKpiFactory->build(),
+                'orderKpi' => ($this->getConfiguration()->get('PS_DISPLAY_BACKOFFICE_KPIS') ?? true) ? $orderKpiFactory->build() : null,
                 'layoutHeaderToolbarBtn' => $this->getOrderToolbarButtons(),
             ]
         );
@@ -2348,6 +2348,11 @@ class OrderController extends PrestaShopAdminController
                 ),
                 InvalidCartRuleDiscountValueException::INVALID_FREE_SHIPPING => $this->trans(
                     'Shipping discount value cannot exceed the total price of this order.',
+                    [],
+                    'Admin.Orderscustomers.Notification'
+                ),
+                InvalidCartRuleDiscountValueException::DUPLICATE_FREE_SHIPPING => $this->trans(
+                    'This order already has a free shipping discount.',
                     [],
                     'Admin.Orderscustomers.Notification'
                 ),

@@ -3,6 +3,7 @@
 > For folder structure and navigation, see [STRUCTURE.md](STRUCTURE.md).
 > For cross-domain naming traps and identity gotchas, see [GOTCHAS.md](GOTCHAS.md).
 > For multi-store scoping (ShopConstraint, AbstractMultistoreConfiguration), see [MULTISTORE.md](MULTISTORE.md).
+> For the service-container / kernel topology (3 Symfony kernels vs the hand-built FO legacy container, and where service definitions live), see [CONTAINERS.md](CONTAINERS.md).
 
 ## Project overview
 
@@ -10,11 +11,13 @@ PrestaShop is an open-source e-commerce platform built on Symfony. It follows a 
 
 ## Branching & Versioning
 
-PrestaShop follows [SemVer](https://semver.org/). Active branches merge upward: `9.1.x` → `develop`. Target the lowest applicable branch.
+PrestaShop follows [SemVer](https://semver.org/). Active branches merge upward: `9.2.x` → `develop`. Target the lowest applicable branch.
 
-- **`9.1.x`**: Current stable (patch releases). Bug fixes and minor improvements only — no new features.
-- **`develop`**: Next minor (9.2.0). New features and improvements go here. No breaking changes.
+- **`9.2.x`**: Next release (9.2.0). Bug fixes and improvements go here.
+- **`develop`**: Next minor (9.3.0). New features go here. No breaking changes.
 - **`8.2.x`**: LTS, security fixes only. Rarely modified.
+
+`9.1.x` was closed and deleted once 9.1.5 was finalised, so nothing targets it any more.
 
 Breaking changes are only allowed in major versions. See [ADR 0017](https://github.com/PrestaShop/adr/blob/master/0017-backward-compatibility-promise.md) for the backward compatibility promise. More architecture decisions at https://github.com/PrestaShop/adr.
 
@@ -40,8 +43,11 @@ Breaking changes are only allowed in major versions. See [ADR 0017](https://gith
 - No ObjectModel in new code — use Doctrine entities or CQRS commands
 - All services defined in YAML; no `new` in controllers
 - No `Db::getInstance()` in new code — use Doctrine repositories
+- New repository/DBAL queries use the QueryBuilder (never string-built SQL, whatever the surrounding file's historical style); single-row lookups add `setMaxResults(1)`. When the matched column has no unique constraint, prefer returning ALL matches (`fetchFirstColumn()` + `ORDER BY <pk> ASC`) so the caller can detect ambiguity instead of silently picking the oldest row
 - No business logic in controllers — delegate to Handlers
 - Catch specific domain exceptions, not generic `\Exception`
+- A UUID primary key column is named `<entity>_uuid` (e.g. `import_job_uuid`), stored as `char(36)` and human-readable — the `id_` prefix signals the integer convention and misleads on a UUID, and the hand-written install schema is read directly by developers
+- Keep comments and docblocks minimal: never restate what the code says, and prefer making the code self-explanatory. Comment only where real complexity remains, and then explain the *why* in as few words as possible
 - Run `php vendor/bin/php-cs-fixer fix` to apply coding style (config: `.php-cs-fixer.dist.php`)
 - Run `php vendor/bin/phpstan analyse` for static analysis (config: `phpstan.neon.dist`)
 
@@ -52,6 +58,7 @@ Breaking changes are only allowed in major versions. See [ADR 0017](https://gith
 - **Handlers** — implement logic; never call other handlers (compose at controller level)
 - Handler interfaces in `src/Core/Domain/{Domain}/CommandHandler|QueryHandler/`
 - Concrete implementations in `src/Adapter/{Domain}/CommandHandler|QueryHandler/`
+- An identity value object wrapping a UUID is named `<Entity>Uuid` (e.g. `ImportJobUuid`), never `<Entity>Id`: the `Id` names wrap an auto-increment key and validate "positive integer", a UUID is an externally generated token with a different rule and no ordering guarantee. The name carries through constructor parameters, getters, DTO fields and repository lookups
 
 ## Testing
 
@@ -72,7 +79,7 @@ Common slips unrelated to the feature itself — check before pushing:
 - **No IDE / local config files** (`.idea/`, editor settings) and no stray blank-line or missing-end-of-line changes.
 - **Keep lists alphabetically sorted** (interface members, imports where applicable, enum-like lists) — not all of this is caught by php-cs-fixer.
 - **Squash noise commits** (review fixups, reverts) so history stays readable.
-- **Target the lowest applicable branch** (`9.1.x` for bug fixes, `develop` for features) — see Branching & Versioning above.
+- **Target the lowest applicable branch** (`9.2.x` for bug fixes, `develop` for features) — see Branching & Versioning above.
 
 ## Skills
 
@@ -95,6 +102,27 @@ All 28 shared infrastructure components have a context file at `Component/{Compo
 
 Components: AdminAPI, BackOfficeHelp, Behat, Configuration, Console, Context, ContextStateManager, Controller, Cookie, CQRS, Database, Export, ExtraProperty, FacetedSearch, Forms, Grid, Hook, Import, Javascript, Link, Locale, MailTemplate, Migration, Playwright, PositionUpdater, Router, Smarty, TinyMCE, Twig
 
+## Which context to read
+
+Match the task against this table before touching code; a task that mentions a keyword or a path in the second column needs the contexts in the third one. The domain context of the entity involved is always read too. A skill does not replace this table: read the contexts of the matching rows, the domain context included, before following its steps.
+
+| Topic | Keywords / paths | Read |
+|-------|------------------|------|
+| Admin API (REST endpoints) | "Admin API", "endpoint", "API resource", `/admin-api/`, scopes, OpenAPI, Swagger, `ps_apiresources`; paths: rule [rules/admin-api.md](rules/admin-api.md) | [Component/AdminAPI/CONTEXT.md](Component/AdminAPI/CONTEXT.md) (core infrastructure), then `modules/ps_apiresources/.ai/CONTEXT.md` (endpoint conventions) and `modules/ps_apiresources/.ai/REVIEW.md` when reviewing. Endpoint inventory: [generated/api-resources.md](generated/api-resources.md) |
+| Commands, queries, handlers | `src/Core/Domain/**`, `src/Adapter/**/CommandHandler`, `QueryHandler` | [Component/CQRS/CONTEXT.md](Component/CQRS/CONTEXT.md) |
+| Back-office listings | grid, `QueryBuilder`, `Filters`, `src/Core/Grid/**` | [Component/Grid/CONTEXT.md](Component/Grid/CONTEXT.md) |
+| Back-office forms | form type, `FormDataProvider`, `FormDataHandler`, `src/PrestaShopBundle/Form/**` | [Component/Forms/CONTEXT.md](Component/Forms/CONTEXT.md) |
+| Symfony controllers, routing | `src/PrestaShopBundle/Controller/Admin/**`, `routing/admin/**` | [Component/Controller/CONTEXT.md](Component/Controller/CONTEXT.md), [Component/Router/CONTEXT.md](Component/Router/CONTEXT.md) |
+| Multistore | `ShopConstraint`, `shopId`, shop association | [MULTISTORE.md](MULTISTORE.md) |
+| Behat / Playwright tests | `tests/Integration/Behaviour/**`, `tests/UI/**` | [Component/Behat/CONTEXT.md](Component/Behat/CONTEXT.md), [Component/Playwright/CONTEXT.md](Component/Playwright/CONTEXT.md) |
+| Legacy to Symfony migration | `AdminXController`, ObjectModel removal, feature flags | [Component/Migration/CONTEXT.md](Component/Migration/CONTEXT.md) |
+| Hooks | `dispatchHook`, `hook.xml` | [Component/Hook/CONTEXT.md](Component/Hook/CONTEXT.md) |
+| Extra properties (custom fields) | `ExtraProperty`, `extra_property_definition` | [Component/ExtraProperty/CONTEXT.md](Component/ExtraProperty/CONTEXT.md) |
+
+### Cross-repository work: `ps_apiresources`
+
+The Admin API endpoints live in the `ps_apiresources` module, installed by composer under `modules/ps_apiresources/` (gitignored). On a developer machine that folder is often a symlink to a separate clone, and a tool started in this repository does not necessarily load the module's own entry points (`CLAUDE.md`, path rules): read `modules/ps_apiresources/.ai/CONTEXT.md` explicitly, and refer to module files through the `modules/ps_apiresources/...` path (a tool-specific way to load the module clone as a second root is in [STRUCTURE.md](STRUCTURE.md)). The module skills are exposed here through chained symlinks ([STRUCTURE.md](STRUCTURE.md) → "Adding a module-owned skill"). A core change that the module depends on is paired with a module PR: see the `link-apiresources-fork` skill.
+
 ## Generated indexes
 
 Pre-built snapshots in `generated/` — useful when no PHP runtime is available (web-based assistants, CI contexts). Regenerate with `bash bin/generate-ai-index.sh`.
@@ -111,3 +139,4 @@ When PHP is available, prefer the authoritative live sources:
 | [generated/routes.md](generated/routes.md) | Symfony admin/API routes | Before adding a route or looking up a controller action |
 | [generated/entities.md](generated/entities.md) | Doctrine entity columns and relations | Before writing a query or migration |
 | [generated/hooks.md](generated/hooks.md) | Hook names discovered in source | Before dispatching or listening to a hook |
+| [generated/api-resources.md](generated/api-resources.md) | Admin API endpoints per domain, from `modules/ps_apiresources` when it is installed | Before adding an endpoint or looking up which resource exposes a domain |

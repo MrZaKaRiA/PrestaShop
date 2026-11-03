@@ -4,6 +4,7 @@
  * docs/licenses/LICENSE.txt file that was distributed with this source code.
  */
 
+use PrestaShop\PrestaShop\Core\Domain\Shipment\ValueObject\DeliverySlipNumber;
 use PrestaShop\PrestaShop\Core\Util\Sorter;
 use PrestaShopBundle\Entity\Shipment;
 
@@ -35,7 +36,7 @@ class HTMLTemplateShipmentDeliverySlipCore extends HTMLTemplate
      */
     public function __construct(array $shipmentData, Smarty $smarty)
     {
-        if (!isset($shipmentData['shipment']) || !is_array($shipmentData)) {
+        if (!isset($shipmentData['shipment'])) {
             $errorMessage = Context::getContext()->getTranslator()->trans('Invalid shipment data provided to HTMLTemplateShipmentDeliverySlip');
             throw new PrestaShopException($errorMessage);
         }
@@ -65,9 +66,10 @@ class HTMLTemplateShipmentDeliverySlipCore extends HTMLTemplate
 
         // Use delivery slip prefix and shipment ID as the number
         $prefix = Configuration::get('PS_DELIVERY_PREFIX', Context::getContext()->language->id);
-        $this->title = sprintf(
-            HTMLTemplateShipmentDeliverySlip::l('%1$s%2$06d'),
+
+        $this->title = DeliverySlipNumber::format(
             $prefix,
+            $this->order->id,
             $this->shipment->getId()
         );
 
@@ -166,7 +168,6 @@ class HTMLTemplateShipmentDeliverySlipCore extends HTMLTemplate
             'addresses_tab' => $this->smarty->fetch($this->getTemplate('delivery-slip.addresses-tab')),
             'summary_tab' => $this->smarty->fetch($this->getTemplate('shipment-delivery-slip.summary-tab')),
             'product_tab' => $this->smarty->fetch($this->getTemplate('shipment-delivery-slip.product-tab')),
-            'payment_tab' => $this->smarty->fetch($this->getTemplate('delivery-slip.payment-tab')),
         ];
         $this->smarty->assign($tpls);
 
@@ -248,6 +249,11 @@ class HTMLTemplateShipmentDeliverySlipCore extends HTMLTemplate
      */
     public function getFilename()
     {
-        return Configuration::get('PS_DELIVERY_PREFIX', Context::getContext()->language->id, null, $this->order->id_shop) . sprintf('%06d', $this->shipment->getId()) . '.pdf';
+        return Configuration::get('PS_DELIVERY_PREFIX', Context::getContext()->language->id, null, $this->order->id_shop)
+            . DeliverySlipNumber::format(
+                '',
+                $this->order->id,
+                $this->shipment->getId()
+            ) . '.pdf';
     }
 }

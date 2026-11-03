@@ -13,7 +13,7 @@ use PrestaShopBundle\ApiPlatform\DomainObjectDetector;
 use PrestaShopBundle\ApiPlatform\LocalizedValueUpdater;
 use PrestaShopBundle\ApiPlatform\Metadata\LocalizedValue;
 use PrestaShopBundle\ApiPlatform\NormalizationMapper;
-use PrestaShopBundle\ApiPlatform\Validator\CQRSApiValidator;
+use PrestaShopBundle\ApiPlatform\Validator\CQRSApiValidatorInterface;
 use ReflectionClass;
 use ReflectionMethod;
 use ReflectionNamedType;
@@ -50,7 +50,7 @@ class CQRSApiNormalizer extends ObjectNormalizer
     public function __construct(
         protected readonly DomainObjectDetector $domainObjectDetector,
         protected readonly LocalizedValueUpdater $localizedValueUpdater,
-        protected readonly CQRSApiValidator $CQRSApiValidator,
+        protected readonly CQRSApiValidatorInterface $CQRSApiValidator,
         ?ClassMetadataFactoryInterface $classMetadataFactory = null,
         ?NameConverterInterface $nameConverter = null,
         ?PropertyAccessorInterface $propertyAccessor = null,
@@ -179,7 +179,7 @@ class CQRSApiNormalizer extends ObjectNormalizer
             $metadata = $this->classMetadataFactory->getMetadataFor($object);
             $reflClass = $metadata->getReflectionClass();
         } else {
-            $reflClass = new ReflectionClass(\is_object($object) ? $object::class : $object);
+            $reflClass = new ReflectionClass($object);
         }
 
         foreach ($reflClass->getMethods(ReflectionMethod::IS_PUBLIC) as $reflMethod) {

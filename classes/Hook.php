@@ -1254,12 +1254,16 @@ class HookCore extends ObjectModel
      *
      * @throws PrestaShop\PrestaShop\Core\Exception\ContainerNotFoundException
      * @throws ServiceNotFoundException
-     * @throws PrestaShop\PrestaShop\Core\Exception\ContainerNotFoundException
      */
     private static function getHookModuleFilter(): HookModuleFilter
     {
         $serviceContainer = SymfonyContainer::getInstance();
 
+        // The fallback below only triggers when NO Symfony kernel container is booted yet — which happens during
+        // container compilation (LegacyHookSubscriber::getSubscribedEvents() is read by RegisterListenersPass before
+        // any kernel container exists), in BO, FO and CLI alike. In a normal request the kernel container is present,
+        // so the FO container is never used here. The hand-built front container is the only source of
+        // HookModuleFilter available at that bootstrap moment.
         if (is_null($serviceContainer)) {
             $serviceContainer = ContainerBuilder::getContainer(
                 'front',
@@ -1583,9 +1587,7 @@ class HookCore extends ObjectModel
             $active_hooks = Db::getInstance()->executeS($sql);
             if (is_array($active_hooks) && !empty($active_hooks)) {
                 $hook_names = array_column($active_hooks, 'name');
-                if (is_array($hook_names)) {
-                    Cache::store('active_hooks', $hook_names);
-                }
+                Cache::store('active_hooks', $hook_names);
             }
         }
 

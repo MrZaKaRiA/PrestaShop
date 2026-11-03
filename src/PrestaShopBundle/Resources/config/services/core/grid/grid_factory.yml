@@ -50,6 +50,14 @@ services:
       - '@prestashop.core.grid.filter.form_factory'
       - '@prestashop.core.hook.dispatcher'
 
+  prestashop.core.grid.factory.extra_property_definition:
+    class: 'PrestaShop\PrestaShop\Core\Grid\GridFactory'
+    arguments:
+      - '@prestashop.core.grid.definition.factory.extra_property_definition'
+      - '@prestashop.adapter.grid.data_factory.extra_property_definition_decorator'
+      - '@prestashop.core.grid.filter.form_factory'
+      - '@prestashop.core.hook.dispatcher'
+
   prestashop.core.grid.factory.meta:
     class: 'PrestaShop\PrestaShop\Core\Grid\GridFactory'
     arguments:
@@ -547,7 +555,7 @@ services:
     class: 'PrestaShop\PrestaShop\Core\Grid\GridFactory'
     arguments:
       - '@PrestaShop\PrestaShop\Core\Grid\Definition\Factory\ImageTypeGridDefinitionFactory'
-      - '@prestashop.core.grid.data_factory.image_type'
+      - '@PrestaShop\PrestaShop\Core\Grid\Data\Factory\ImageTypeGridDataFactory'
       - '@prestashop.core.grid.filter.form_factory'
       - '@prestashop.core.hook.dispatcher'
 
@@ -572,5 +580,13 @@ services:
     arguments:
       - '@PrestaShop\PrestaShop\Core\Grid\Definition\Factory\QuickAccessGridDefinitionFactory'
       - '@prestashop.core.grid.data_factory.quick_access'
+      - '@prestashop.core.grid.filter.form_factory'
+      - '@prestashop.core.hook.dispatcher'
+
+  prestashop.core.grid.factory.business_entity:
+    class: 'PrestaShop\PrestaShop\Core\Grid\GridFactory'
+    arguments:
+      - '@PrestaShop\PrestaShop\Core\Grid\Definition\Factory\BusinessEntityGridDefinitionFactory'
+      - '@PrestaShop\PrestaShop\Core\Grid\Data\Factory\BusinessEntityGridDataFactory'
       - '@prestashop.core.grid.filter.form_factory'
       - '@prestashop.core.hook.dispatcher'

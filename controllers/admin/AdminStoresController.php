@@ -7,6 +7,8 @@
 use PrestaShop\PrestaShop\Core\Image\ImageFormatConfiguration;
 
 /**
+ * @deprecated since 9.3 and will be removed in 10.0 - This controller was migrated in 9.3
+ *
  * @property Store $object
  */
 class AdminStoresControllerCore extends AdminController
@@ -407,12 +409,26 @@ class AdminStoresControllerCore extends AdminController
             $images_types = ImageType::getImagesTypes('stores');
             foreach ($images_types as $image_type) {
                 foreach ($configuredImageFormats as $imageFormat) {
+                    $error = 0;
+                    $targetWidth = null;
+                    $targetHeight = null;
+                    $sourceWidth = null;
+                    $sourceHeight = null;
+
                     ImageManager::resize(
                         _PS_STORE_IMG_DIR_ . $id_store . '.jpg',
                         _PS_STORE_IMG_DIR_ . $id_store . '-' . stripslashes($image_type['name']) . '.' . $imageFormat,
                         (int) $image_type['width'],
                         (int) $image_type['height'],
-                        $imageFormat
+                        $imageFormat,
+                        false,
+                        $error,
+                        $targetWidth,
+                        $targetHeight,
+                        5,
+                        $sourceWidth,
+                        $sourceHeight,
+                        $image_type['image_fitment']
                     );
                 }
             }

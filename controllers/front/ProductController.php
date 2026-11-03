@@ -66,8 +66,13 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
 
     public function canonicalRedirection(string $canonical_url = ''): void
     {
-        // This is there to prevent error, because this function is also called
-        // in parent front controller before we have even loaded our data.
+        /*
+         * This is there to prevent error, because this function is also called
+         * in parent front controller before we have even loaded our data.
+         *
+         * There can also be a scenario where this page is accessed for a non-existing product ID,
+         * in this case, we need to always validate everything, because we can't "die early".
+         */
         if (!Validate::isLoadedObject($this->product)) {
             return;
         }
@@ -98,13 +103,15 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
      */
     public function getCanonicalURL(): string
     {
-        $product = $this->context->smarty->getTemplateVars('product');
-
-        if (!($product instanceof ProductLazyArray)) {
+        /*
+         * There can be a scenario where this page is accessed for a non-existing product ID,
+         * in this case, we need to always validate everything, because we can't "die early".
+         */
+        if (!Validate::isLoadedObject($this->product)) {
             return '';
         }
 
-        return $product->getCanonicalUrl();
+        return $this->getTemplateVarProduct()->getCanonicalUrl();
     }
 
     /**
@@ -140,7 +147,9 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
         }
 
         // Otherwise immediately show 404
+        // Watch out - the controller goes on, always validate $this->product.
         if (!Validate::isLoadedObject($this->product)) {
+            Hook::exec('actionNotFound');
             $this->product = null;
             header('HTTP/1.1 404 Not Found');
             header('Status: 404 Not Found');
@@ -307,7 +316,11 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
      */
     public function initContent(): void
     {
-        if ($this->product === null) {
+        /*
+         * There can be a scenario where this page is accessed for a non-existing product ID,
+         * in this case, we need to always validate everything, because we can't "die early".
+         */
+        if (!Validate::isLoadedObject($this->product)) {
             parent::initContent();
 
             return;
@@ -436,6 +449,10 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
 
     public function displayAjaxQuickview(): void
     {
+        /*
+         * Since this call is made on already a valid product page, we can safely assume that
+         * the product is valid and loaded, so we can use getTemplateVarProduct() without any checks.
+         */
         $productForTemplate = $this->getTemplateVarProduct();
         ob_end_clean();
         header('Content-Type: application/json');
@@ -450,6 +467,10 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
 
     public function displayAjaxRefresh(): void
     {
+        /*
+         * Since this call is made on already a valid product page, we can safely assume that
+         * the product is valid and loaded, so we can use getTemplateVarProduct() without any checks.
+         */
         $product = $this->getTemplateVarProduct();
 
         // After refresh, we will show the customer a new quantity he has to use
@@ -754,7 +775,7 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
                         }
                     }
                     $id_attributes = Db::getInstance()->executeS('SELECT pac2.`id_attribute` FROM `' . _DB_PREFIX_ . 'product_attribute_combination` pac2' .
-                        ((!Product::isAvailableWhenOutOfStock($this->product->out_of_stock) && 0 == Configuration::get('PS_DISP_UNAVAILABLE_ATTR')) ?
+                        ((!Product::isAvailableWhenOutOfStock($this->product->out_of_stock) && false === (bool) Configuration::get('PS_DISP_UNAVAILABLE_ATTR')) ?
                         ' INNER JOIN `' . _DB_PREFIX_ . 'stock_available` pa ON pa.id_product_attribute = pac2.id_product_attribute
                         WHERE pa.quantity > 0 AND ' :
                         ' WHERE ') .
@@ -776,6 +797,8 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
                 $index = 0;
                 $current_selected_attribute = 0;
                 foreach ($group['attributes'] as $key => $attribute) {
+                    // TODO: This case seems to be always run, so the last attribute is always selected.
+                    // @phpstan-ignore identical.alwaysTrue
                     if ($index === 0) {
                         $current_selected_attribute = $key;
                     }
@@ -791,7 +814,7 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
             }
 
             // wash attributes list (if some attributes are unavailables and if allowed to wash it)
-            if (!Product::isAvailableWhenOutOfStock($this->product->out_of_stock) && Configuration::get('PS_DISP_UNAVAILABLE_ATTR') == 0) {
+            if (!Product::isAvailableWhenOutOfStock($this->product->out_of_stock) && false === (bool) Configuration::get('PS_DISP_UNAVAILABLE_ATTR')) {
                 foreach ($groups as &$group) {
                     foreach ($group['attributes_quantity'] as $key => $quantity) {
                         if ($quantity <= 0) {
@@ -864,15 +887,17 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
         $productBrandUrl = null;
 
         if (!empty($this->product->id_manufacturer)) {
-            $manufacturerPresenter = new ManufacturerPresenter($this->context->link);
-            $productManufacturer = $manufacturerPresenter->present(
-                new Manufacturer((int) $this->product->id_manufacturer, $this->context->language->id),
-                $this->context->language
-            );
+            $manufacturer = new Manufacturer((int) $this->product->id_manufacturer, $this->context->language->id);
 
-            // These two variables are deprecated are kept just for backward compatibility and will be removed in v10
-            $manufacturerImageUrl = $productManufacturer['image']['small']['url'];
-            $productBrandUrl = $productManufacturer['url'];
+            // The product can still point to a brand that has been deleted in the meantime
+            if (Validate::isLoadedObject($manufacturer)) {
+                $manufacturerPresenter = new ManufacturerPresenter($this->context->link);
+                $productManufacturer = $manufacturerPresenter->present($manufacturer, $this->context->language);
+
+                // These two variables are deprecated are kept just for backward compatibility and will be removed in v10
+                $manufacturerImageUrl = $productManufacturer['image']['small']['url'] ?? null;
+                $productBrandUrl = $productManufacturer['url'];
+            }
         }
 
         $this->context->smarty->assign([
@@ -1024,9 +1049,9 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
     }
 
     /**
-     * @return Product
+     * @return Product|null
      */
-    public function getProduct(): Product
+    public function getProduct(): ?Product
     {
         return $this->product;
     }
@@ -1421,7 +1446,7 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
     {
         $breadcrumb = parent::getBreadcrumbLinks();
 
-        if ($this->product === null) {
+        if (!Validate::isLoadedObject($this->product)) {
             return $breadcrumb;
         }
 
@@ -1454,7 +1479,7 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
 
         $breadcrumb['links'][] = [
             'title' => $this->product->name,
-            'url' => $this->context->link->getProductLink($this->product, null, null, null, null, null, (int) $this->getIdProductAttributeByRequest()),
+            'url' => $this->getCanonicalURL(),
         ];
 
         return $breadcrumb;
@@ -1470,6 +1495,14 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
     {
         $structuredData = parent::getStructuredData();
 
+        /*
+         * There can be a scenario where this page is accessed for a non-existing product ID,
+         * in this case, we need to always validate everything, because we can't "die early".
+         */
+        if (!Validate::isLoadedObject($this->product)) {
+            return $structuredData;
+        }
+
         $product = $this->getTemplateVarProduct();
 
         // Base structure
@@ -1477,9 +1510,13 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
             '@context' => 'https://schema.org',
             '@type' => 'Product',
             'name' => $product['name'],
-            'description' => preg_replace("/[\r\n]+/", ' ', $product['meta']['description'] ?? ''),
+            'url' => $this->getCanonicalURL(),
+            'description' => $product['description_short_text'],
             'category' => $product['category_name'] ?? '',
         ];
+
+        // Add product features as additional properties
+        $this->addProductFeaturesToStructuredData($structuredData['product'], $product['grouped_features']);
 
         // Images, with cover first
         if (!empty($product['images'])) {
@@ -1547,6 +1584,12 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
                 ],
             ];
 
+            // Add item condition if available
+            if (!empty($product['show_condition']) && !empty($product['condition']['schema_url'])) {
+                $structuredData['product']['offers']['itemCondition'] = $product['condition']['schema_url'];
+            }
+
+            // Add codes if available
             if (!empty($product['reference'])) {
                 $structuredData['product']['offers']['sku'] = $product['reference'];
             }
@@ -1556,6 +1599,40 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
         }
 
         return $structuredData;
+    }
+
+    /**
+     * Adds complete product features to the structured product data.
+     *
+     * @param array $structuredProductData
+     * @param array $features
+     */
+    protected function addProductFeaturesToStructuredData(array &$structuredProductData, array $features): void
+    {
+        foreach ($features as $feature) {
+            // Ignore incomplete features that cannot form a valid property-value pair
+            if (!isset($feature['name'], $feature['value'])) {
+                continue;
+            }
+
+            // Normalize grouped values into one human-readable schema value using UTF-8-aware line break matching
+            $featureName = trim((string) $feature['name']);
+            $featureValue = (string) preg_replace('/\R+/u', ', ', trim((string) $feature['value']));
+            if ($featureName === '' || $featureValue === '') {
+                continue;
+            }
+
+            // Initialize the property collection when the first complete feature is found
+            if (!isset($structuredProductData['additionalProperty'])) {
+                $structuredProductData['additionalProperty'] = [];
+            }
+
+            $structuredProductData['additionalProperty'][] = [
+                '@type' => 'PropertyValue',
+                'name' => $featureName,
+                'value' => $featureValue,
+            ];
+        }
     }
 
     protected function addProductCustomizationData(array $product_full)

@@ -15,9 +15,11 @@ use PrestaShop\PrestaShop\Core\Context\ShopContext;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinition;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionCollection;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionRepositoryInterface;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionShopFilterInterface;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyType;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Grid\ExtraPropertiesGridQueryBuilderModifier;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Value\ExtraPropertyValueCaster;
+use Psr\Log\NullLogger;
 
 /**
  * Covers ExtraPropertiesGridQueryBuilderModifier::castExtraProperties() (post-fetch grid cast)
@@ -39,31 +41,31 @@ class ExtraPropertiesGridCastTest extends TestCase
         $records = $modifier->castExtraProperties([
             [
                 'id_product' => '7',
-                $boolDef->getFormFieldName() => '1',
-                $intDef->getFormFieldName() => '42',
-                $dateDef->getFormFieldName() => '2026-06-11 10:00:00',
-                $stringDef->getFormFieldName() => 'box',
+                $boolDef->getFieldName() => '1',
+                $intDef->getFieldName() => '42',
+                $dateDef->getFieldName() => '2026-06-11 10:00:00',
+                $stringDef->getFieldName() => 'box',
             ],
             [
                 'id_product' => '8',
-                $boolDef->getFormFieldName() => null,   // NOT NULL bool, missing row → false
-                $intDef->getFormFieldName() => null,    // nullable int → stays null
-                $dateDef->getFormFieldName() => null,
-                $stringDef->getFormFieldName() => null,
+                $boolDef->getFieldName() => null,   // NOT NULL bool, missing row → false
+                $intDef->getFieldName() => null,    // nullable int → stays null
+                $dateDef->getFieldName() => null,
+                $stringDef->getFieldName() => null,
             ],
         ], self::GRID_ID);
 
-        $this->assertTrue($records[0][$boolDef->getFormFieldName()]);
-        $this->assertSame(42, $records[0][$intDef->getFormFieldName()]);
-        $this->assertSame('2026-06-11 10:00:00', $records[0][$dateDef->getFormFieldName()]);
-        $this->assertSame('box', $records[0][$stringDef->getFormFieldName()]);
+        $this->assertTrue($records[0][$boolDef->getFieldName()]);
+        $this->assertSame(42, $records[0][$intDef->getFieldName()]);
+        $this->assertSame('2026-06-11 10:00:00', $records[0][$dateDef->getFieldName()]);
+        $this->assertSame('box', $records[0][$stringDef->getFieldName()]);
         // Non-extra columns are untouched.
         $this->assertSame('7', $records[0]['id_product']);
 
-        $this->assertFalse($records[1][$boolDef->getFormFieldName()]);
-        $this->assertNull($records[1][$intDef->getFormFieldName()]);
-        $this->assertNull($records[1][$dateDef->getFormFieldName()]);
-        $this->assertNull($records[1][$stringDef->getFormFieldName()]);
+        $this->assertFalse($records[1][$boolDef->getFieldName()]);
+        $this->assertNull($records[1][$intDef->getFieldName()]);
+        $this->assertNull($records[1][$dateDef->getFieldName()]);
+        $this->assertNull($records[1][$stringDef->getFieldName()]);
     }
 
     public function testRecordsUntouchedWhenGridHasNoDefinitions(): void
@@ -104,11 +106,16 @@ class ExtraPropertiesGridCastTest extends TestCase
         $repository = $this->createMock(ExtraPropertyDefinitionRepositoryInterface::class);
         $repository->method('getAllDefinitions')->willReturn(new ExtraPropertyDefinitionCollection($definitions));
 
+        $definitionShopFilter = $this->createMock(ExtraPropertyDefinitionShopFilterInterface::class);
+        $definitionShopFilter->method('filterByShopConstraint')->willReturnArgument(0);
+
         return new ExtraPropertiesGridQueryBuilderModifier(
             $repository,
             'ps_',
             $this->createMock(LanguageContext::class),
-            $this->createMock(ShopContext::class)
+            $this->createMock(ShopContext::class),
+            $definitionShopFilter,
+            new NullLogger()
         );
     }
 

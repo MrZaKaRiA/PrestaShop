@@ -7,6 +7,8 @@
 namespace Tests\Integration\Behaviour\Features\Context\Domain;
 
 use Behat\Gherkin\Node\TableNode;
+use Context;
+use Employee;
 use PHPUnit\Framework\Assert;
 use PrestaShop\PrestaShop\Core\Domain\Employee\Command\AddEmployeeCommand;
 use PrestaShop\PrestaShop\Core\Domain\Employee\Command\BulkDeleteEmployeeCommand;
@@ -38,6 +40,8 @@ class EmployeeFeatureContext extends AbstractDomainFeatureContext
     private const MIN_PASSWORD_LENGTH = 1;
     private const MAX_PASSWORD_LENGTH = 72;
     private const MIN_PASSWORD_SCORE = 1;
+
+    private ?Employee $contextEmployee = null;
 
     /**
      * @Given I Add new employee :employeeReference to shop :shopReference with the following details:
@@ -210,6 +214,35 @@ class EmployeeFeatureContext extends AbstractDomainFeatureContext
     }
 
     /**
+     * @Given there is no employee in the legacy context
+     */
+    public function removeContextEmployee(): void
+    {
+        // Like the Admin API and the CLI, restored after the scenario
+        $this->contextEmployee = Context::getContext()->employee;
+        Context::getContext()->employee = null;
+    }
+
+    /**
+     * @AfterScenario
+     */
+    public function restoreContextEmployee(): void
+    {
+        if (null !== $this->contextEmployee) {
+            Context::getContext()->employee = $this->contextEmployee;
+            $this->contextEmployee = null;
+        }
+    }
+
+    /**
+     * @Then I should get an error that the employee does not exist
+     */
+    public function assertLastErrorIsEmployeeNotFound(): void
+    {
+        $this->assertLastErrorIs(EmployeeNotFoundException::class);
+    }
+
+    /**
      * @When I toggle employee status for :employeeReference
      */
     public function toggleEmployeeStatus(string $employeeReference): void
@@ -234,23 +267,27 @@ class EmployeeFeatureContext extends AbstractDomainFeatureContext
         $mailDevClient = $this->getMailDevClient();
         $mailDevClient->deleteAllEmails();
 
-        $resetUrl = $this->getCommandBus()->handle(new SendEmployeePasswordResetEmailCommand($employeeEmail));
-        $resetUrl = str_replace('http://localhost', '', $resetUrl);
-        /** @var UrlMatcherInterface $router */
-        $router = CommonFeatureContext::getContainer()->get('router');
-        $matchedRoute = $router->match($resetUrl);
-        Assert::assertEquals('admin_reset_password', $matchedRoute['_route']);
-        Assert::assertNotEmpty($matchedRoute['resetToken']);
+        $this->getCommandBus()->handle(new SendEmployeePasswordResetEmailCommand($employeeEmail));
 
-        $emails = $mailDevClient->getAllEmails();
+        $emails = $mailDevClient->waitForEmails(1);
         Assert::assertCount(1, $emails);
         $resetEmail = $emails[0];
         Assert::assertStringContainsString('Your new password', $resetEmail['subject']);
-        Assert::assertStringContainsString($resetUrl, $resetEmail['text']);
-        Assert::assertStringContainsString($resetUrl, $resetEmail['html']);
         Assert::assertEquals($employeeEmail, $resetEmail['to'][0]['address']);
 
-        $this->getSharedStorage()->set($tokenReference, $matchedRoute['resetToken']);
+        if (!preg_match('#/reset-password/([^\s"\'<]+)#', $resetEmail['text'], $matches)) {
+            throw new RuntimeException('Reset URL not found in email body');
+        }
+        $resetToken = $matches[1];
+        Assert::assertNotEmpty($resetToken);
+        Assert::assertStringContainsString('/reset-password/' . $resetToken, $resetEmail['html']);
+
+        /** @var UrlMatcherInterface $router */
+        $router = CommonFeatureContext::getContainer()->get('router');
+        $matchedRoute = $router->match('/reset-password/' . $resetToken);
+        Assert::assertEquals('admin_reset_password', $matchedRoute['_route']);
+
+        $this->getSharedStorage()->set($tokenReference, $resetToken);
     }
 
     /**

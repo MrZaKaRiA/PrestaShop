@@ -233,10 +233,6 @@ class OrderCore extends ObjectModel
             'id_lang' => ['xlink_resource' => 'languages'],
             'id_customer' => ['xlink_resource' => 'customers'],
             'id_carrier' => ['xlink_resource' => 'carriers'],
-            'current_state' => [
-                'xlink_resource' => 'order_states',
-                'setter' => 'setWsCurrentState',
-            ],
             'module' => ['required' => true],
             'invoice_number' => [],
             'invoice_date' => [],
@@ -250,6 +246,16 @@ class OrderCore extends ObjectModel
                 'setter' => 'setWsShippingNumber',
             ],
             'note' => [],
+            /*
+             * Must stay last. Its setter runs the whole status change, which generates the invoice
+             * and writes invoice_number and invoice_date on the order. WebserviceRequest walks these
+             * fields in order and assigns null to every one the request left out, so anything listed
+             * after this would undo what the status change just produced.
+             */
+            'current_state' => [
+                'xlink_resource' => 'order_states',
+                'setter' => 'setWsCurrentState',
+            ],
         ],
         'associations' => [
             'order_rows' => ['resource' => 'order_row', 'setter' => false, 'virtual_entity' => true,
@@ -263,6 +269,7 @@ class OrderCore extends ObjectModel
                     'product_ean13' => ['setter' => false],
                     'product_isbn' => ['setter' => false],
                     'product_upc' => ['setter' => false],
+                    'product_mpn' => ['setter' => false],
                     'product_price' => ['setter' => false],
                     'id_customization' => ['required' => false, 'xlink_resource' => 'customizations'],
                     'unit_price_tax_incl' => ['setter' => false],
@@ -931,9 +938,10 @@ class OrderCore extends ObjectModel
             SELECT IFNULL(SUM(ord.product_quantity), SUM(product_quantity_return))
             FROM `' . _DB_PREFIX_ . 'orders` o
             INNER JOIN `' . _DB_PREFIX_ . 'order_detail` od
-            ON od.id_order = o.id_order
+                ON od.id_order = o.id_order
             LEFT JOIN `' . _DB_PREFIX_ . 'order_return_detail` ord
-            ON ord.id_order_detail = od.id_order_detail
+                ON ord.id_order_detail = od.id_order_detail
+                    AND ord.cancelled = 0 
             WHERE o.id_order = ' . (int) $this->id);
     }
 
@@ -1634,6 +1642,7 @@ class OrderCore extends ObjectModel
             `product_ean13`,
             `product_isbn`,
             `product_upc`,
+            `product_mpn`,
             `unit_price_tax_incl`,
             `unit_price_tax_excl`
             FROM `' . _DB_PREFIX_ . 'order_detail`

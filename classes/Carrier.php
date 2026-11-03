@@ -21,6 +21,12 @@ class CarrierCore extends ObjectModel
     public const ALL_CARRIERS = 5;
 
     // Shipping methods
+    /**
+     * @deprecated Since 9.2.0, will be removed in the next major. This value only remains to resolve carriers created
+     *             before the 1.6 carrier wizard: every carrier must define an explicit shipping method. Remove the
+     *             PS_SHIPPING_METHOD configuration with it: its seed in install-dev/data/xml/configuration.xml, its
+     *             load in Cart::getPackageShippingCostValue(), and both resolutions in this class.
+     */
     public const SHIPPING_METHOD_DEFAULT = 0;
     public const SHIPPING_METHOD_WEIGHT = 1;
     public const SHIPPING_METHOD_PRICE = 2;
@@ -89,7 +95,7 @@ class CarrierCore extends ObjectModel
     public $is_free = false;
 
     /** @var int Shipping cost calculation method: by weight or by price or free */
-    public $shipping_method = 0;
+    public $shipping_method = self::SHIPPING_METHOD_PRICE;
 
     /**
      * @var bool If true, an external module, if defined, will be asked to provide the shipping cost,
@@ -139,7 +145,7 @@ class CarrierCore extends ObjectModel
             'name' => ['type' => self::TYPE_STRING, 'validate' => 'isCarrierName', 'required' => true, 'size' => 64],
             'active' => ['type' => self::TYPE_BOOL, 'validate' => 'isBool', 'required' => true],
             'is_free' => ['type' => self::TYPE_BOOL, 'validate' => 'isBool'],
-            'url' => ['type' => self::TYPE_STRING, 'validate' => 'isAbsoluteUrl', 'size' => 255],
+            'url' => ['type' => self::TYPE_STRING, 'validate' => 'isCarrierTrackingUrl', 'size' => 255],
             'shipping_handling' => ['type' => self::TYPE_BOOL, 'validate' => 'isBool'],
             'shipping_external' => ['type' => self::TYPE_BOOL],
             'range_behavior' => ['type' => self::TYPE_BOOL, 'validate' => 'isBool'],
@@ -192,9 +198,14 @@ class CarrierCore extends ObjectModel
         parent::__construct($id, $id_lang);
         $this->image_dir = _PS_SHIP_IMG_DIR_;
         /*
-         * keep retrocompatibility SHIPPING_METHOD_DEFAULT
+         * keep retrocompatibility SHIPPING_METHOD_DEFAULT: only a row loaded from the database can carry the legacy
+         * value, a freshly built carrier holds the declared default
          */
-        if ($this->shipping_method == Carrier::SHIPPING_METHOD_DEFAULT) {
+        if ($this->id && $this->shipping_method == Carrier::SHIPPING_METHOD_DEFAULT) {
+            @trigger_error(
+                'The SHIPPING_METHOD_DEFAULT value and the PS_SHIPPING_METHOD configuration are deprecated since 9.2.0 and will be removed in the next major, set an explicit shipping method on the carrier.',
+                E_USER_DEPRECATED
+            );
             $this->shipping_method = ((int) Configuration::get('PS_SHIPPING_METHOD') ? Carrier::SHIPPING_METHOD_WEIGHT : Carrier::SHIPPING_METHOD_PRICE);
         }
     }
@@ -271,6 +282,7 @@ class CarrierCore extends ObjectModel
 
             return Db::getInstance()->delete('cart_rule_carrier', 'id_carrier = ' . (int) $this->id)
                     && Db::getInstance()->delete('module_carrier', 'id_reference = ' . (int) $this->id_reference)
+                    && Db::getInstance()->delete('product_carrier', 'id_carrier_reference = ' . (int) $this->id_reference)
                     && $this->deleteTaxRulesGroup(Shop::getShops(true, null, true));
         }
     }
@@ -386,18 +398,19 @@ class CarrierCore extends ObjectModel
     }
 
     /**
-     * Get delivery price for a given order by total order price MINUS shipping costs.
+     * Get delivery price for a given order by total MINUS shipping costs.
      *
      * @param float $order_total Order total to pay
      * @param int $id_zone Zone id (for customer delivery address)
      * @param int|null $id_currency Currency ID
+     * @param float|null $shipmentTotal Total of the current shipment, sent to the actionDeliveryPriceByPrice hook when the improved_shipment feature is enabled, null otherwise (including for legacy orders predating this feature)
      *
      * @return float Maximum delivery price
      */
-    public function getDeliveryPriceByPrice($order_total, $id_zone, $id_currency = null)
+    public function getDeliveryPriceByPrice($order_total, $id_zone, $id_currency = null, $shipmentTotal = null)
     {
         $id_carrier = (int) $this->id;
-        $cache_key = $this->id . '_' . $order_total . '_' . $id_zone . '_' . $id_currency;
+        $cache_key = $this->id . '_' . $order_total . '_' . $id_zone . '_' . $id_currency . '_' . $shipmentTotal;
         if (!isset(self::$price_by_price[$cache_key])) {
             if (!empty($id_currency)) {
                 $order_total = Tools::convertPrice($order_total, $id_currency, false);
@@ -420,7 +433,12 @@ class CarrierCore extends ObjectModel
             }
         }
 
-        $price_by_price = Hook::exec('actionDeliveryPriceByPrice', ['id_carrier' => $id_carrier, 'order_total' => $order_total, 'id_zone' => $id_zone]);
+        $price_by_price = Hook::exec('actionDeliveryPriceByPrice', [
+            'id_carrier' => $id_carrier,
+            'order_total' => $order_total,
+            'shipment_total' => $shipmentTotal,
+            'id_zone' => $id_zone,
+        ]);
         if (is_numeric($price_by_price)) {
             self::$price_by_price[$cache_key] = $price_by_price;
         }
@@ -435,13 +453,14 @@ class CarrierCore extends ObjectModel
      * @param float $order_total Order total to pay
      * @param int $id_zone Zone id (for customer delivery address)
      * @param int|null $id_currency Currency ID
+     * @param float|null $shipmentTotal Total of the current shipment, sent to the actionDeliveryPriceByPrice hook when the improved_shipment feature is enabled, null otherwise (including for legacy orders predating this feature)
      *
      * @return bool true if carrier is available
      */
-    public static function checkDeliveryPriceByPrice($id_carrier, $order_total, $id_zone, $id_currency = null)
+    public static function checkDeliveryPriceByPrice($id_carrier, $order_total, $id_zone, $id_currency = null, $shipmentTotal = null)
     {
         $id_carrier = (int) $id_carrier;
-        $cache_key = $id_carrier . '_' . $order_total . '_' . $id_zone . '_' . $id_currency;
+        $cache_key = $id_carrier . '_' . $order_total . '_' . $id_zone . '_' . $id_currency . '_' . $shipmentTotal;
         if (!isset(self::$price_by_price2[$cache_key])) {
             if (!empty($id_currency)) {
                 $order_total = Tools::convertPrice($order_total, $id_currency, false);
@@ -460,7 +479,12 @@ class CarrierCore extends ObjectModel
             self::$price_by_price2[$cache_key] = (isset($result['price']));
         }
 
-        $price_by_price = Hook::exec('actionDeliveryPriceByPrice', ['id_carrier' => $id_carrier, 'order_total' => $order_total, 'id_zone' => $id_zone]);
+        $price_by_price = Hook::exec('actionDeliveryPriceByPrice', [
+            'id_carrier' => $id_carrier,
+            'order_total' => $order_total,
+            'shipment_total' => $shipmentTotal,
+            'id_zone' => $id_zone,
+        ]);
         if (is_numeric($price_by_price)) {
             self::$price_by_price2[$cache_key] = true;
         }
@@ -650,7 +674,7 @@ class CarrierCore extends ObjectModel
         $states = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS('
             SELECT s.*
             FROM `' . _DB_PREFIX_ . 'state` s
-            WHERE s.id_country IN (' . implode(',', array_keys($countries)) . ')
+            WHERE s.id_country IN (' . implode(',', array_keys($result)) . ')
               AND s.active = 1
             ORDER BY s.`name` ASC'
         );
@@ -1167,6 +1191,10 @@ class CarrierCore extends ObjectModel
 
         if ($this->shipping_method == Carrier::SHIPPING_METHOD_DEFAULT) {
             // backward compatibility
+            @trigger_error(
+                'The SHIPPING_METHOD_DEFAULT value and the PS_SHIPPING_METHOD configuration are deprecated since 9.2.0 and will be removed in the next major, set an explicit shipping method on the carrier.',
+                E_USER_DEPRECATED
+            );
             if ((int) Configuration::get('PS_SHIPPING_METHOD')) {
                 $method = Carrier::SHIPPING_METHOD_WEIGHT;
             } else {
@@ -1682,7 +1710,7 @@ class CarrierCore extends ObjectModel
         $carrier_list = Db::getInstance()->executeS('
             SELECT id_carrier FROM `' . _DB_PREFIX_ . 'carrier`
             WHERE deleted = 0
-            ' . (is_array($exception) && count($exception) > 0 ? 'AND id_carrier NOT IN (' . implode(',', $exception) . ')' : ''));
+            ' . (count($exception) > 0 ? 'AND id_carrier NOT IN (' . implode(',', $exception) . ')' : ''));
 
         if ($carrier_list) {
             $data = [];

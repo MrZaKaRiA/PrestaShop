@@ -20,7 +20,7 @@ class StoreCore extends ObjectModel
     /** @var int Country id */
     public $id_country;
 
-    /** @var int State id */
+    /** @var int|null State id */
     public $id_state;
 
     /** @var string|array<string> Name */
@@ -38,10 +38,10 @@ class StoreCore extends ObjectModel
     /** @var string City */
     public $city;
 
-    /** @var float Latitude */
+    /** @var string|null Latitude */
     public $latitude;
 
-    /** @var float Longitude */
+    /** @var string|null Longitude */
     public $longitude;
 
     /** @var string|array Store hours (PHP serialized) */
@@ -188,6 +188,6 @@ class StoreCore extends ObjectModel
      */
     public static function atLeastOneStoreExists()
     {
-        return (bool) Db::getInstance()->getValue('SELECT `id_store` FROM `' . _DB_PREFIX_ . 'store`', false);
+        return (bool) Db::getInstance()->getValue('SELECT s.`id_store` FROM `' . _DB_PREFIX_ . 'store` s ' . Shop::addSqlAssociation('store', 's') . ' WHERE s.`active` = 1', false);
     }
 }

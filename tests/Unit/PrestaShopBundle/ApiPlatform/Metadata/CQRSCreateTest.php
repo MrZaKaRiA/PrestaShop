@@ -451,4 +451,165 @@ class CQRSCreateTest extends TestCase
         $this->assertInstanceOf(InvalidArgumentException::class, $caughtException);
         $this->assertEquals('Specifying an extra property allowEmptyBody and a allowEmptyBody argument that are different is invalid', $caughtException->getMessage());
     }
+
+    public function testMinVersion(): void
+    {
+        // Default value is null (no extra property added)
+        $operation = new CQRSCreate();
+        $this->assertEquals([], $operation->getExtraProperties());
+        $this->assertNull($operation->getMinVersion());
+
+        // minVersion parameter in constructor
+        $operation = new CQRSCreate(
+            minVersion: '9.2.0',
+        );
+        $this->assertEquals(['minVersion' => '9.2.0'], $operation->getExtraProperties());
+        $this->assertEquals('9.2.0', $operation->getMinVersion());
+
+        // Extra properties parameter in constructor
+        $operation = new CQRSCreate(
+            extraProperties: ['minVersion' => '9.2.0']
+        );
+        $this->assertEquals(['minVersion' => '9.2.0'], $operation->getExtraProperties());
+        $this->assertEquals('9.2.0', $operation->getMinVersion());
+
+        // Extra properties AND minVersion parameters in constructor, no conflict when values are equal
+        $operation = new CQRSCreate(
+            extraProperties: ['minVersion' => '9.2.0'],
+            minVersion: '9.2.0',
+        );
+        $this->assertEquals(['minVersion' => '9.2.0'], $operation->getExtraProperties());
+        $this->assertEquals('9.2.0', $operation->getMinVersion());
+
+        // Use with method, returned object is a clone All values are replaced
+        $operation2 = $operation->withMinVersion('9.3.0');
+        $this->assertNotEquals($operation2, $operation);
+        $this->assertEquals(['minVersion' => '9.3.0'], $operation2->getExtraProperties());
+        $this->assertEquals('9.3.0', $operation2->getMinVersion());
+        // Initial operation not modified of course
+        $this->assertEquals(['minVersion' => '9.2.0'], $operation->getExtraProperties());
+        $this->assertEquals('9.2.0', $operation->getMinVersion());
+
+        // When both values are specified, but they are different trigger an exception
+        $caughtException = null;
+        try {
+            new CQRSCreate(
+                extraProperties: ['minVersion' => '9.2.0'],
+                minVersion: '9.2.1',
+            );
+        } catch (InvalidArgumentException $e) {
+            $caughtException = $e;
+        }
+
+        $this->assertNotNull($caughtException);
+        $this->assertInstanceOf(InvalidArgumentException::class, $caughtException);
+        $this->assertEquals('Specifying an extra property minVersion and a minVersion argument that are different is invalid', $caughtException->getMessage());
+    }
+
+    public function testMaxVersion(): void
+    {
+        // Default value is null (no extra property added)
+        $operation = new CQRSCreate();
+        $this->assertEquals([], $operation->getExtraProperties());
+        $this->assertNull($operation->getMaxVersion());
+
+        // maxVersion parameter in constructor
+        $operation = new CQRSCreate(
+            maxVersion: '9.2.0',
+        );
+        $this->assertEquals(['maxVersion' => '9.2.0'], $operation->getExtraProperties());
+        $this->assertEquals('9.2.0', $operation->getMaxVersion());
+
+        // Extra properties parameter in constructor
+        $operation = new CQRSCreate(
+            extraProperties: ['maxVersion' => '9.2.0']
+        );
+        $this->assertEquals(['maxVersion' => '9.2.0'], $operation->getExtraProperties());
+        $this->assertEquals('9.2.0', $operation->getMaxVersion());
+
+        // Extra properties AND maxVersion parameters in constructor, no conflict when values are equal
+        $operation = new CQRSCreate(
+            extraProperties: ['maxVersion' => '9.2.0'],
+            maxVersion: '9.2.0',
+        );
+        $this->assertEquals(['maxVersion' => '9.2.0'], $operation->getExtraProperties());
+        $this->assertEquals('9.2.0', $operation->getMaxVersion());
+
+        // Use with method, returned object is a clone All values are replaced
+        $operation2 = $operation->withMaxVersion('9.3.0');
+        $this->assertNotEquals($operation2, $operation);
+        $this->assertEquals(['maxVersion' => '9.3.0'], $operation2->getExtraProperties());
+        $this->assertEquals('9.3.0', $operation2->getMaxVersion());
+        // Initial operation not modified of course
+        $this->assertEquals(['maxVersion' => '9.2.0'], $operation->getExtraProperties());
+        $this->assertEquals('9.2.0', $operation->getMaxVersion());
+
+        // When both values are specified, but they are different trigger an exception
+        $caughtException = null;
+        try {
+            new CQRSCreate(
+                extraProperties: ['maxVersion' => '9.2.0'],
+                maxVersion: '9.2.1',
+            );
+        } catch (InvalidArgumentException $e) {
+            $caughtException = $e;
+        }
+
+        $this->assertNotNull($caughtException);
+        $this->assertInstanceOf(InvalidArgumentException::class, $caughtException);
+        $this->assertEquals('Specifying an extra property maxVersion and a maxVersion argument that are different is invalid', $caughtException->getMessage());
+    }
+
+    public function testDefaultValues(): void
+    {
+        // Not defined by default
+        $operation = new CQRSCreate();
+        $this->assertEquals([], $operation->getDefaultValues());
+
+        // Default values parameter in constructor
+        $operation = new CQRSCreate(
+            defaultValues: ['active' => true, 'grade' => 0],
+        );
+        $this->assertEquals(['defaultValues' => ['active' => true, 'grade' => 0]], $operation->getExtraProperties());
+        $this->assertEquals(['active' => true, 'grade' => 0], $operation->getDefaultValues());
+
+        // Extra properties parameter in constructor
+        $operation = new CQRSCreate(
+            extraProperties: ['defaultValues' => ['active' => true]],
+        );
+        $this->assertEquals(['defaultValues' => ['active' => true]], $operation->getExtraProperties());
+        $this->assertEquals(['active' => true], $operation->getDefaultValues());
+
+        // Extra properties AND default values parameters in constructor, both values are equals no problem
+        $operation = new CQRSCreate(
+            extraProperties: ['defaultValues' => ['active' => true]],
+            defaultValues: ['active' => true],
+        );
+        $this->assertEquals(['defaultValues' => ['active' => true]], $operation->getExtraProperties());
+        $this->assertEquals(['active' => true], $operation->getDefaultValues());
+
+        // Use with method, returned object is a clone All values are replaced
+        $operation2 = $operation->withDefaultValues(['grade' => 5]);
+        $this->assertNotEquals($operation2, $operation);
+        $this->assertEquals(['defaultValues' => ['grade' => 5]], $operation2->getExtraProperties());
+        $this->assertEquals(['grade' => 5], $operation2->getDefaultValues());
+        // Initial operation not modified of course
+        $this->assertEquals(['defaultValues' => ['active' => true]], $operation->getExtraProperties());
+        $this->assertEquals(['active' => true], $operation->getDefaultValues());
+
+        // When both values are specified, but they are different trigger an exception
+        $caughtException = null;
+        try {
+            new CQRSCreate(
+                extraProperties: ['defaultValues' => ['active' => true]],
+                defaultValues: ['active' => false],
+            );
+        } catch (InvalidArgumentException $e) {
+            $caughtException = $e;
+        }
+
+        $this->assertNotNull($caughtException);
+        $this->assertInstanceOf(InvalidArgumentException::class, $caughtException);
+        $this->assertEquals('Specifying an extra property defaultValues and a defaultValues argument that are different is invalid', $caughtException->getMessage());
+    }
 }

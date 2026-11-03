@@ -105,7 +105,7 @@ class ProductFormDataProviderTest extends TestCase
         );
 
         $formData = $provider->getData(self::PRODUCT_ID);
-        $this->assertNotNull($formData);
+        $this->assertSame(self::PRODUCT_ID, $formData['id']);
         $contextShopId = 51;
         $queryBusMock = $this->createQueryBusCheckingShopMock($contextShopId);
         $provider = new ProductFormDataProvider(
@@ -118,7 +118,7 @@ class ProductFormDataProviderTest extends TestCase
         );
 
         $formData = $provider->getData(self::PRODUCT_ID);
-        $this->assertNotNull($formData);
+        $this->assertSame(self::PRODUCT_ID, $formData['id']);
     }
 
     /**
@@ -162,6 +162,24 @@ class ProductFormDataProviderTest extends TestCase
                 yield $dataset;
             }
         }
+    }
+
+    /**
+     * @dataProvider getShopAssociations
+     */
+    public function testHasMultipleShops(array $shopIds, bool $expected): void
+    {
+        $provider = $this->buildProvider($this->createQueryBusMock(['shop_ids' => $shopIds]));
+
+        $formData = $provider->getData(self::PRODUCT_ID);
+
+        Assert::assertSame($expected, $formData['has_multiple_shops']);
+    }
+
+    public static function getShopAssociations(): iterable
+    {
+        yield 'last shop' => [[1], false];
+        yield 'multiple shops' => [[1, 2], true];
     }
 
     /**
@@ -469,30 +487,35 @@ class ProductFormDataProviderTest extends TestCase
                 'type' => 'orders',
                 'date' => null,
                 'employee_name' => null,
+                'api_client_name' => null,
                 'delta_quantity' => -19,
             ],
             [
                 'type' => 'edition',
                 'date' => '2021-05-24 15:24:32',
                 'employee_name' => 'Paul Atreide',
+                'api_client_name' => null,
                 'delta_quantity' => +20,
             ],
             [
                 'type' => 'orders',
                 'date' => null,
                 'employee_name' => null,
+                'api_client_name' => null,
                 'delta_quantity' => -23,
             ],
             [
                 'type' => 'edition',
                 'date' => '2021-05-22 16:35:48',
                 'employee_name' => 'Frodo Baggins',
+                'api_client_name' => null,
                 'delta_quantity' => +20,
             ],
             [
                 'type' => 'orders',
                 'date' => null,
                 'employee_name' => null,
+                'api_client_name' => null,
                 'delta_quantity' => -17,
             ],
         ];
@@ -1128,7 +1151,7 @@ class ProductFormDataProviderTest extends TestCase
             $this->createProductStockInformation($product),
             $this->createVirtualProductFile($product),
             $product['cover_thumbnail'] ?? self::COVER_URL,
-            [1],
+            $product['shop_ids'] ?? [1],
         );
     }
 
@@ -1569,6 +1592,7 @@ class ProductFormDataProviderTest extends TestCase
     {
         return [
             'id' => self::PRODUCT_ID,
+            'has_multiple_shops' => false,
             'header' => [
                 'type' => ProductType::TYPE_STANDARD,
                 'initial_type' => ProductType::TYPE_STANDARD,

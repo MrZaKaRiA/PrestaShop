@@ -6,6 +6,8 @@
  */
 use PrestaShop\PrestaShop\Adapter\ContainerFinder;
 use PrestaShop\PrestaShop\Adapter\ServiceLocator;
+use PrestaShop\PrestaShop\Core\Domain\Shop\ValueObject\ShopCollection;
+use PrestaShop\PrestaShop\Core\Domain\Shop\ValueObject\ShopConstraint;
 use PrestaShop\PrestaShop\Core\Exception\ContainerNotFoundException;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionCollection;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionRepositoryInterface;
@@ -382,7 +384,7 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
             // Get field value, if value is multilang and field is empty, use value from default lang
             $value = $this->$field;
             if ($type == self::FORMAT_LANG && $id_lang && is_array($value)) {
-                if (!empty($value[$id_lang])) {
+                if (!Tools::isEmpty($value[$id_lang] ?? null)) {
                     $value = $value[$id_lang];
                 } elseif (!empty($data['required']) || in_array(
                     Tools::strtolower($data['validate'] ?? ''),
@@ -619,7 +621,7 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
      * Takes current object ID, gets its values from database,
      * saves them in a new row and loads newly saved values as a new object.
      *
-     * @return ObjectModel|false
+     * @return static|false
      *
      * @throws PrestaShopDatabaseException
      */
@@ -688,7 +690,7 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
             }
         }
 
-        /** @var ObjectModel $object_duplicated */
+        /** @var static $object_duplicated */
         $object_duplicated = new $definition['classname']((int) $object_id);
         $object_duplicated->duplicateShops((int) $this->id);
 
@@ -796,6 +798,18 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
         if (!empty($multiLangFieldsToUpdate)) {
             $multiLangFieldsToUpdate = $this->getFieldsLang();
             if (is_array($multiLangFieldsToUpdate)) {
+                $shopIdsByLang = [];
+                if ($this->isLangMultishop() && $id_shop_list) {
+                    $id_shop_list = array_unique(array_map('intval', $id_shop_list));
+                    $langRows = Db::getInstance()->executeS(
+                        'SELECT id_lang, id_shop FROM ' . pSQL(_DB_PREFIX_ . $this->def['table']) . '_lang
+                        WHERE ' . pSQL($this->def['primary']) . ' = ' . (int) $this->id
+                    );
+                    foreach ($langRows ?: [] as $langRow) {
+                        $shopIdsByLang[(int) $langRow['id_lang']][] = (int) $langRow['id_shop'];
+                    }
+                }
+
                 foreach ($multiLangFieldsToUpdate as $field) {
                     foreach (array_keys($field) as $key) {
                         if (!Validate::isTableOrIdentifier($key)) {
@@ -805,21 +819,20 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
 
                     // If this table is linked to multishop system, update / insert for all shops from context
                     if ($this->isLangMultishop()) {
-                        $id_shop_list = Shop::getContextListShopID();
-                        if (count($this->id_shop_list)) {
-                            $id_shop_list = $this->id_shop_list;
+                        unset($field['id_shop']);
+                        $existingShopIds = array_intersect($id_shop_list, $shopIdsByLang[(int) $field['id_lang']] ?? []);
+                        if ($existingShopIds && array_diff_key($field, [$this->def['primary'] => true, 'id_lang' => true])) {
+                            $result &= Db::getInstance()->update(
+                                $this->def['table'] . '_lang',
+                                $field,
+                                pSQL($this->def['primary']) . ' = ' . (int) $this->id
+                                    . ' AND id_lang = ' . (int) $field['id_lang']
+                                    . ' AND id_shop IN (' . implode(',', $existingShopIds) . ')'
+                            );
                         }
-                        foreach ($id_shop_list as $id_shop) {
-                            $field['id_shop'] = (int) $id_shop;
-                            $where = pSQL($this->def['primary']) . ' = ' . (int) $this->id
-                                        . ' AND id_lang = ' . (int) $field['id_lang']
-                                        . ' AND id_shop = ' . (int) $id_shop;
 
-                            if (Db::getInstance()->getValue('SELECT COUNT(*) FROM ' . pSQL(_DB_PREFIX_ . $this->def['table']) . '_lang WHERE ' . $where)) {
-                                $result &= Db::getInstance()->update($this->def['table'] . '_lang', $field, $where);
-                            } else {
-                                $result &= Db::getInstance()->insert($this->def['table'] . '_lang', $field);
-                            }
+                        foreach (array_diff($id_shop_list, $existingShopIds) as $id_shop) {
+                            $result &= Db::getInstance()->insert($this->def['table'] . '_lang', $field + ['id_shop' => $id_shop]);
                         }
                     } else {
                         // If this table is not linked to multishop system ...
@@ -897,13 +910,19 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
             return false;
         }
 
-        // Delete extra property rows from *_extra / *_extra_lang / *_extra_shop
-        if (!$has_multishop_entries && !empty($this->def['table']) && (int) $this->id > 0) {
+        // Delete extra property rows: everything (all three scope tables) when the entity is
+        // fully removed; only the removed shops' per-shop rows when it survives on other
+        // shops — mirroring the native *_shop / multishop *_lang deletes above.
+        if (!empty($this->def['table']) && (int) $this->id > 0) {
             /** @var ExtraPropertyWriterInterface|null $writer */
             $writer = static::findService(ExtraPropertyWriterInterface::class);
             if ($writer) {
                 try {
-                    $writer->deleteAll($this->def['table'], $this->def['primary'], (int) $this->id);
+                    if ($has_multishop_entries) {
+                        $writer->deleteForShops($this->def['table'], $this->def['primary'], (int) $this->id, $shopIdsList);
+                    } else {
+                        $writer->deleteAll($this->def['table'], $this->def['primary'], (int) $this->id);
+                    }
                 } catch (Throwable) {
                     $result = false;
                 }
@@ -1087,6 +1106,14 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
      */
     public function validateExtraProperties(bool $die = true, bool $errorReturn = false)
     {
+        // Nothing was ever set on this instance: nothing to validate, so the definitions are not
+        // loaded at all. Saving an entity that carries no extra property values (a log row, for
+        // instance) must not depend on the definitions repository, which may itself be in the
+        // middle of hydrating definitions and logging about them.
+        if (null === $this->extra_properties_bag) {
+            return true;
+        }
+
         // B6: check definitions first (avoids loading bag when entity has no extra fields).
         $collection = $this->getDefinitionCollection();
         if ($collection->isEmpty()) {
@@ -1104,16 +1131,23 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
             return true;
         }
 
-        $result = $validator->validate($bag->getModifiedValues(), $collection);
-        if (true !== $result) {
-            if ($die) {
-                throw new PrestaShopException($result);
-            }
-
-            return $errorReturn ? $result : false;
+        $violations = $validator->validate($bag->getModifiedValues(), $collection);
+        if (0 === count($violations)) {
+            return true;
         }
 
-        return true;
+        // Flatten every violation into one human-readable message ("<path>: <message>" per line).
+        $messages = [];
+        foreach ($violations as $violation) {
+            $messages[] = sprintf('%s: %s', $violation->getPropertyPath(), (string) $violation->getMessage());
+        }
+        $message = implode("\n", $messages);
+
+        if ($die) {
+            throw new PrestaShopException($message);
+        }
+
+        return $errorReturn ? $message : false;
     }
 
     /**
@@ -1844,8 +1878,9 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
      * Results are cached by class name to avoid repeated reflection across calls.
      *
      * Use this static helper instead of $this->isLangMultishop() whenever you need to check
-     * multishop-lang behaviour from outside an ObjectModel instance (e.g. in ExtraPropertyReader,
-     * form builder, or API integrations).
+     * multishop-lang behaviour from outside an ObjectModel instance. (The extra property
+     * services no longer rely on it: they derive shop-awareness from the storage schema,
+     * see ExtraPropertyDefinition::isMultiShop().)
      *
      * @param string $className Fully-qualified or short class name of the ObjectModel subclass
      *
@@ -2118,7 +2153,9 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
     /**
      * Returns object definition.
      *
-     * @param string|object $class Name of object
+     * @template T of ObjectModelCore
+     *
+     * @param class-string<T>|T $class Name of object
      * @param string|null $field Name of field if we want the definition of one field only
      *
      * @return array
@@ -2274,7 +2311,7 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
             return $this->extra_property_definitions;
         }
 
-        $this->extra_property_definitions = $repository->getAllDefinitions()->filterByEntity($this->def['table']);
+        $this->extra_property_definitions = $repository->getAllDefinitions()->filterByTableName($this->def['table']);
 
         return $this->extra_property_definitions;
     }
@@ -2293,6 +2330,11 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
     protected function persistExtraProperties(): bool
     {
         if (empty($this->def['table']) || (int) $this->id <= 0) {
+            return true;
+        }
+
+        // Same short-circuit as validateExtraProperties(): no bag, nothing was set, nothing to persist.
+        if (null === $this->extra_properties_bag) {
             return true;
         }
 
@@ -2319,14 +2361,37 @@ abstract class ObjectModelCore implements PrestaShop\PrestaShop\Core\Foundation\
                 $this->def['primary'],
                 (int) $this->id,
                 $bag->getModifiedValues(),
-                Context::getContext()->getShopConstraint(),
+                $this->resolveExtraPropertiesShopConstraint(),
                 $this->resolveCurrentLangId() ?: null
             );
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            error_log(sprintf(
+                'Extra property write failed for %s #%d: %s',
+                $this->def['table'],
+                (int) $this->id,
+                $e->getMessage()
+            ));
+
             return false;
         }
 
         return true;
+    }
+
+    /**
+     * Returns the shop constraint extra property writes must follow — the same scope the
+     * native multishop columns are written with: the explicit $id_shop_list when the
+     * caller set one (add()/update() use it for the *_shop rows), the legacy shop context
+     * otherwise (all shops / shop group / single shop, see Context::getShopConstraint()).
+     */
+    protected function resolveExtraPropertiesShopConstraint(): ShopConstraint
+    {
+        $shopIdsList = array_map('intval', $this->id_shop_list);
+        if (!empty($shopIdsList)) {
+            return ShopCollection::shops($shopIdsList);
+        }
+
+        return Context::getContext()->getShopConstraint();
     }
 
     /**

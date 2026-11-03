@@ -38,25 +38,47 @@ interface ExtraPropertyReaderInterface
      *   - $langId given  → one scalar value per field
      *   - $langId null   → array keyed by id_lang: ['property' => [1 => 'en', 2 => 'fr']]
      *
-     * Shop-scope fields always return a single scalar for the given ShopConstraint.
+     * Per-shop values (SHOP scope, and LANG scope on multilang-multishop entities) always
+     * return a single scalar for the given ShopConstraint: a single-shop constraint reads
+     * that shop's row; a shop group / all shops / collection constraint is resolved to its
+     * deterministic representative shop (the default shop when it belongs to the scope,
+     * the lowest shop id of the scope otherwise). Whether the lang table is shop-aware is
+     * detected internally from the storage schema — never passed by the caller.
      *
-     * @param string $entityName Entity table name (e.g. "product")
+     * @param string $tableName Physical entity table name without prefix (ExtraPropertyDefinition::getTableName(), e.g. "product", "product_attribute")
      * @param string $primaryKeyName PK column name (e.g. "id_product")
      * @param int $entityId
      * @param int|null $langId Null fetches all languages (returns array keyed by id_lang)
      * @param ShopConstraint $shopConstraint Shop context — determines which row to read
-     * @param bool $isLangMultishop Whether lang scope is shop-aware
-     * @param ExtraPropertyDefinitionCollection|null $definitions Pre-filtered definitions; when null, all definitions for $entityName are loaded from the repository
+     * @param ExtraPropertyDefinitionCollection|null $definitions Pre-filtered definitions; when null, all definitions for $tableName are loaded from the repository
      *
      * @return array<string, array<string, mixed>>
      */
     public function getExtraProperties(
-        string $entityName,
+        string $tableName,
         string $primaryKeyName,
         int $entityId,
         ?int $langId,
         ShopConstraint $shopConstraint,
-        bool $isLangMultishop = false,
+        ?ExtraPropertyDefinitionCollection $definitions = null,
+    ): array;
+
+    /**
+     * Same as {@see getExtraProperties()} but for several entity instances at once, fetched with a single query
+     * per scope (not a per-id loop). Useful to enrich a whole list/collection response without N+1 reads.
+     *
+     * @param int[] $entityIds Entity ids to read (non-positive ids and duplicates are ignored)
+     *
+     * @return array<int, array<string, array<string, mixed>>> Per entity id: the same grouped structure
+     *                                                         getExtraProperties() returns. Ids with no row still
+     *                                                         appear, seeded with each property's default value.
+     */
+    public function getMultipleExtraProperties(
+        string $tableName,
+        string $primaryKeyName,
+        array $entityIds,
+        ?int $langId,
+        ShopConstraint $shopConstraint,
         ?ExtraPropertyDefinitionCollection $definitions = null,
     ): array;
 }

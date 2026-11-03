@@ -12,6 +12,7 @@ use AddressFormat;
 use Cache;
 use Country;
 use PrestaShop\PrestaShop\Adapter\Country\Repository\CountryRepository;
+use PrestaShop\PrestaShop\Adapter\Zone\Repository\ZoneRepository;
 use PrestaShop\PrestaShop\Core\CommandBus\Attributes\AsCommandHandler;
 use PrestaShop\PrestaShop\Core\Domain\Country\AddressFormat\AddressFormatCheckerInterface;
 use PrestaShop\PrestaShop\Core\Domain\Country\Command\AddCountryCommand;
@@ -30,6 +31,7 @@ class AddCountryHandler implements AddCountryHandlerInterface
     public function __construct(
         private readonly CountryRepository $countryRepository,
         private readonly AddressFormatCheckerInterface $addressFormatChecker,
+        private readonly ZoneRepository $zoneRepository,
     ) {
     }
 
@@ -38,6 +40,8 @@ class AddCountryHandler implements AddCountryHandlerInterface
      */
     public function handle(AddCountryCommand $command): CountryId
     {
+        $this->zoneRepository->assertZoneExists($command->getZoneId());
+
         $errors = $this->addressFormatChecker->validate($command->getAddressFormat());
         if ([] !== $errors) {
             throw new InvalidAddressFormatException(
@@ -51,7 +55,7 @@ class AddCountryHandler implements AddCountryHandlerInterface
 
         $country->name = $command->getLocalizedNames();
         $country->iso_code = $command->getIsoCode();
-        $country->call_prefix = $command->getCallPrefix();
+        $country->call_prefix = $command->getCallPrefix()->getValue();
         $country->need_zip_code = $command->needZipCode();
         $country->active = $command->isEnabled();
         $country->need_identification_number = $command->needIdNumber();
@@ -63,13 +67,8 @@ class AddCountryHandler implements AddCountryHandlerInterface
             $country->zip_code_format = $command->getZipCodeFormat()->getValue();
         }
 
-        if (null !== $command->getDefaultCurrency()) {
-            $country->id_currency = $command->getDefaultCurrency();
-        }
-
-        if (null !== $command->getZoneId()) {
-            $country->id_zone = $command->getZoneId()->getValue();
-        }
+        $country->id_currency = $command->getDefaultCurrency();
+        $country->id_zone = $command->getZoneId()->getValue();
 
         $this->countryRepository->add($country);
 

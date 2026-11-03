@@ -26,6 +26,7 @@ use OrderSlip;
 use OrderState;
 use PrestaShop\Decimal\DecimalNumber;
 use PrestaShop\PrestaShop\Adapter\Address\AddressFormatter;
+use PrestaShop\PrestaShop\Adapter\Carrier\TrackingUrlFormatter;
 use PrestaShop\PrestaShop\Adapter\Configuration;
 use PrestaShop\PrestaShop\Adapter\Customer\CustomerDataProvider;
 use PrestaShop\PrestaShop\Adapter\Order\AbstractOrderHandler;
@@ -66,6 +67,7 @@ use PrestaShop\PrestaShop\Core\Domain\Order\QueryResult\OrderSourceForViewing;
 use PrestaShop\PrestaShop\Core\Domain\Order\QueryResult\OrderSourcesForViewing;
 use PrestaShop\PrestaShop\Core\Domain\Order\QueryResult\OrderStatusForViewing;
 use PrestaShop\PrestaShop\Core\Domain\Order\ValueObject\OrderId;
+use PrestaShop\PrestaShop\Core\Domain\Shipment\ValueObject\DeliverySlipNumber;
 use PrestaShop\PrestaShop\Core\Domain\Shop\ValueObject\ShopConstraint;
 use PrestaShop\PrestaShop\Core\Localization\Exception\LocalizationException;
 use PrestaShop\PrestaShop\Core\Localization\Locale;
@@ -410,6 +412,9 @@ final class GetOrderForViewingHandler extends AbstractOrderHandler implements Ge
 
         $documentsForViewing = [];
 
+        $shipments = $this->shipmentRepository->findByOrderId((int) $order->id);
+        $hasShipments = !empty($shipments);
+
         /** @var OrderInvoice|OrderSlip $document */
         foreach ($documents as $document) {
             $type = null;
@@ -423,6 +428,10 @@ final class GetOrderForViewingHandler extends AbstractOrderHandler implements Ge
                 $type = isset($document->is_delivery) ? OrderDocumentType::DELIVERY_SLIP : OrderDocumentType::INVOICE;
             } elseif ($document instanceof OrderSlip) {
                 $type = OrderDocumentType::CREDIT_SLIP;
+            }
+
+            if ($hasShipments && OrderDocumentType::DELIVERY_SLIP === $type) {
+                continue;
             }
 
             if (OrderDocumentType::INVOICE === $type) {
@@ -495,11 +504,45 @@ final class GetOrderForViewingHandler extends AbstractOrderHandler implements Ge
             );
         }
 
+        if ($hasShipments) {
+            $conf = $this->configuration->get(
+                'PS_DELIVERY_PREFIX',
+                null,
+                ShopConstraint::shop((int) $order->id_shop)
+            );
+
+            foreach ($shipments as $shipment) {
+                $shipmentDate = $shipment->getPackedAt();
+
+                if (!$shipmentDate) {
+                    continue;
+                }
+
+                $number = DeliverySlipNumber::format(
+                    $conf[$this->contextLanguageId] ?? '',
+                    $order->id,
+                    $shipment->getId()
+                );
+
+                $documentsForViewing[] = new OrderDocumentForViewing(
+                    $shipment->getId(),
+                    OrderDocumentType::DELIVERY_SLIP,
+                    DateTimeImmutable::createFromMutable($shipmentDate),
+                    $number,
+                    null,
+                    null,
+                    null,
+                    null,
+                    false
+                );
+            }
+        }
+
         $canGenerateInvoice = $this->configuration->get('PS_INVOICE')
             && count($order->getInvoicesCollection())
             && $order->invoice_number;
 
-        $canGenerateDeliverySlip = (bool) $order->delivery_number;
+        $canGenerateDeliverySlip = $hasShipments ? true : (bool) $order->delivery_number;
 
         return new OrderDocumentsForViewing(
             $canGenerateInvoice,
@@ -551,7 +594,7 @@ final class GetOrderForViewingHandler extends AbstractOrderHandler implements Ge
                 $trackingNumber = $item['tracking_number'];
 
                 if ($item['url'] && $trackingNumber) {
-                    $trackingUrl = str_replace('@', $trackingNumber, $item['url']);
+                    $trackingUrl = TrackingUrlFormatter::format($item['url'], $trackingNumber, $order);
                 }
 
                 $weight = sprintf('%.3f %s', $item['weight'], $this->configuration->get('PS_WEIGHT_UNIT'));

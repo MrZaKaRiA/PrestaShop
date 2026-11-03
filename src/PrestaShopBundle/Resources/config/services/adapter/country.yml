@@ -60,6 +60,11 @@ services:
     autowire: true
     autoconfigure: true
 
+  PrestaShop\PrestaShop\Adapter\Country\CommandHandler\BulkDeleteCountriesHandler:
+    public: false
+    autowire: true
+    autoconfigure: true
+
   PrestaShop\PrestaShop\Adapter\Country\CommandHandler\BulkUpdateCountryZoneHandler:
     public: false
     autowire: true
@@ -76,3 +81,4 @@ services:
     autoconfigure: true
 
   PrestaShop\PrestaShop\Adapter\Country\Validate\CountryValidator:
+    autowire: true

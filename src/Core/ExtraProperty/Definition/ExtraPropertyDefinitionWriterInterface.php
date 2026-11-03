@@ -21,11 +21,18 @@ namespace PrestaShop\PrestaShop\Core\ExtraProperty\Definition;
 interface ExtraPropertyDefinitionWriterInterface
 {
     /**
-     * Saves (insert or update) one definition row.
+     * Saves (insert or update) one definition row, including its shop association
+     * (extra_property_definition_shop rows).
      *
      * The repository resolves the existing row internally from the unique key
      * (entity_name, module_name, property_name — unique across scopes); no external
      * ID is required. Returns the definition id on success, false on failure.
+     *
+     * The shop association follows the definition's associatedShopIds tri-state:
+     * null = no information, the stored association is left untouched — so a module
+     * re-registering its definition without shop data cannot clobber a BO-configured
+     * restriction; [] = the stored rows are cleared (revert to the fallback behavior);
+     * a non-empty list = the stored rows are replaced.
      *
      * @param ExtraPropertyDefinition $definition Typed definition as declared by the module
      *
@@ -50,7 +57,8 @@ interface ExtraPropertyDefinitionWriterInterface
      *
      * @param ExtraPropertyDefinition $definition
      *
-     * @return bool False when no matching row is found
+     * @return bool True on success — including when no matching row exists (already deleted);
+     *              false only when the delete statement itself fails
      */
     public function deleteByDefinition(ExtraPropertyDefinition $definition): bool;
 }

@@ -66,10 +66,12 @@ class ProductLazyArrayTest extends TestCase
     private $baseProduct = [
         'id_product' => 0,
         'id_product_attribute' => 0,
+        'price' => 0,
         'price_tax_exc' => 0,
         'specific_prices' => 0,
         'reduction' => 0,
         'price_without_reduction' => 0,
+        'price_without_reduction_without_tax' => 0,
         'new' => 0,
         'pack' => 0,
         'out_of_stock' => OutOfStockType::OUT_OF_STOCK_DEFAULT,
@@ -159,7 +161,7 @@ class ProductLazyArrayTest extends TestCase
             $this->mockHookManager,
             $this->mockConfiguration
         );
-        $this->assertNotNull($productLazyArray);
+        $this->assertInstanceOf(ProductLazyArray::class, $productLazyArray);
     }
 
     /**
@@ -978,6 +980,46 @@ class ProductLazyArrayTest extends TestCase
             'out_of_stock' => OutOfStockType::OUT_OF_STOCK_DEFAULT,
             'quantity' => 1,
         ]), [], false];
+
+        yield 'combination in stock' => [array_merge($this->baseProduct, [
+            'id_product_attribute' => 1,
+            'quantity' => 2,
+            'quantity_all_versions' => 2,
+        ]), [], false];
+
+        yield 'combination out of stock, another one in stock' => [array_merge($this->baseProduct, [
+            'id_product_attribute' => 1,
+            'quantity' => 0,
+            'quantity_all_versions' => 3,
+        ]), [], false];
+
+        yield 'combination in stock, product stock negative' => [array_merge($this->baseProduct, [
+            'id_product_attribute' => 1,
+            'quantity' => 2,
+            'quantity_all_versions' => -3,
+        ]), [], false];
+
+        yield 'all combinations out of stock' => [array_merge($this->baseProduct, [
+            'id_product_attribute' => 1,
+            'quantity' => 0,
+            'quantity_all_versions' => 0,
+        ]), [
+            'out_of_stock' => [
+                'type' => 'out_of_stock',
+                'label' => 'Out-of-Stock',
+            ],
+        ], false];
+
+        yield 'combination with a negative stock' => [array_merge($this->baseProduct, [
+            'id_product_attribute' => 1,
+            'quantity' => -2,
+            'quantity_all_versions' => -2,
+        ]), [
+            'out_of_stock' => [
+                'type' => 'out_of_stock',
+                'label' => 'Out-of-Stock',
+            ],
+        ], false];
     }
 
     /**

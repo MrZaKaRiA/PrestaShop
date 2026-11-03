@@ -441,4 +441,22 @@ class DatabaseDump
             }
         }
     }
+
+    public static function removeExtraTables(): void
+    {
+        $dump = new static();
+
+        $tables = $dump->db->executeS('SHOW TABLES;');
+        foreach ($tables as $table) {
+            // $table is an array looking like this [Tables_in_database_name => 'ps_access']
+            $tableName = reset($table);
+            // Remove all tables that contain _extra, they are the dynamically created tables used
+            // by extra property feature, except the registry tables (extra_property_definition and
+            // its extra_property_definition_shop association) which are in the default structure
+            // and must be kept
+            if (!str_starts_with($tableName, $dump->dbPrefix . 'extra_property_definition') && str_contains($tableName, '_extra')) {
+                $dump->db->execute('DROP TABLE `' . $tableName . '`;');
+            }
+        }
+    }
 }

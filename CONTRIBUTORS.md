@@ -83,6 +83,7 @@ GitHub contributors:
 - Antonio Intagliata
 - antoniofr
 - AntonLejon
+- aomaxime
 - Arman Hosseini
 - Armando Salvador Pérez
 - Arnaud Dohogne
@@ -97,6 +98,7 @@ GitHub contributors:
 - Atchworks
 - Atef Ben Ali
 - Aude
+- Audrius
 - Aurone
 - Aurélien Pelletier
 - Aurélien Rita
@@ -126,6 +128,7 @@ GitHub contributors:
 - Bertrand Merlier
 - bibips
 - BigZ
+- Blivet Thibault
 - BluTiGeS
 - BMS-fenaille
 - Boki
@@ -138,6 +141,7 @@ GitHub contributors:
 - bumbu
 - Burhan
 - Caleydon Media
+- Camille
 - Camille Lafitte
 - Camille V
 - Captain FLAM
@@ -227,6 +231,7 @@ GitHub contributors:
 - David Gonzalez
 - David Oury
 - David Paris
+- David Prochazka
 - David Sivocha
 - David-Julian BUCH
 - Davide
@@ -246,6 +251,7 @@ GitHub contributors:
 - Dheeraj Sharma
 - Dickriven Chellemboyee
 - Dimitrios Karvounaris
+- Dindault Lucas
 - Dinesh Badrukhiya
 - Dingedi
 - Dinis Lage
@@ -368,6 +374,7 @@ GitHub contributors:
 - Guillaume Leseur
 - Guillaume Marsille
 - Guillaume P
+- Guillaume-L
 - GuillaumeKadolis
 - Guisardo
 - Gustavo
@@ -426,6 +433,7 @@ GitHub contributors:
 - Jean Traullé
 - Jean-François Viguier
 - Jean-Philippe Beauve
+- Jean-Philippe Bidegain
 - jeanbe
 - jeckyl
 - Jens Wilke
@@ -490,6 +498,7 @@ GitHub contributors:
 - Justinas Urbanavicius
 - Jáchym Toušek
 - Jérémie Broutier
+- Jérémie LEGRAND
 - Jérémie Tabet
 - Jérôme H
 - Jérôme Nadaud
@@ -517,6 +526,7 @@ GitHub contributors:
 - ks129
 - ksaandev
 - Kyary
+- Kévin
 - Kévin Gleizes
 - Ladel
 - Lathanao
@@ -573,6 +583,7 @@ GitHub contributors:
 - Manuel Jose Pulgar Anguita
 - Manuel Valentin
 - manuelbcd
+- MaoDev
 - Marc González Majoral
 - Marcin Kurek
 - Marcin Sz
@@ -600,6 +611,7 @@ GitHub contributors:
 - Massimo Caroccia
 - Mateus Shirlaw
 - Mateusz Furga
+- Mateusz Gieleciński
 - Mateusz Nastalski
 - Mathias Reker
 - Mathieu Ferment
@@ -690,6 +702,7 @@ GitHub contributors:
 - nezenmoins
 - Nicklas Holmen
 - Nicko
+- Nico H
 - Nicolas Camenisch
 - Nicolas Lœuillet
 - Nicolas Martin
@@ -729,6 +742,7 @@ GitHub contributors:
 - Patrick Mettraux
 - Patrick Peters
 - Patrick Weinstein
+- Paul
 - Paul Campbell
 - Paul Coudeville
 - Paulo Baptista
@@ -752,6 +766,7 @@ GitHub contributors:
 - Pierre
 - Pierre Avizou
 - Pierre Joube
+- Pierre Jouglet
 - Pierre Rambaud
 - Pierre-Yves Christmann
 - Pierrick
@@ -905,6 +920,7 @@ GitHub contributors:
 - SLRkingRing
 - smartdatasoft
 - snamor
+- Soledis
 - soufyan
 - soware
 - spetr
@@ -946,6 +962,7 @@ GitHub contributors:
 - Ted Sanders
 - Teemu Mäntynen
 - Tess
+- ThbPS
 - The Gitter Badger
 - themella
 - theoalloin
@@ -953,6 +970,7 @@ GitHub contributors:
 - therampagerado
 - Thibaud Chauviere
 - Thibault Blivet
+- Thibault Fayolle
 - Thierry Marianne
 - Thijs Simonis
 - Thoma
@@ -967,6 +985,7 @@ GitHub contributors:
 - Thomas Leguillant
 - Thomas Leone
 - Thomas Leviandier
+- Thomas N
 - Thomas Nabord
 - Thomas Nares
 - Thomas Roux
@@ -1044,6 +1063,7 @@ GitHub contributors:
 - Yani Makouf
 - yanngarras
 - Yannick A
+- Yannick A.
 - Yannick Armand
 - Yneet
 - yo7hli

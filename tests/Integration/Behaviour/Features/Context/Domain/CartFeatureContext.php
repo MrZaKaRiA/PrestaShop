@@ -46,6 +46,7 @@ use PrestaShop\PrestaShop\Core\Domain\Cart\Query\GetCartForOrderCreation;
 use PrestaShop\PrestaShop\Core\Domain\Cart\QueryResult\CartForOrderCreation;
 use PrestaShop\PrestaShop\Core\Domain\Cart\ValueObject\CartId;
 use PrestaShop\PrestaShop\Core\Domain\CartRule\Exception\CartRuleValidityException;
+use PrestaShop\PrestaShop\Core\Domain\Customer\Exception\CustomerNotFoundException;
 use PrestaShop\PrestaShop\Core\Domain\Product\Customization\ValueObject\CustomizationId;
 use PrestaShop\PrestaShop\Core\Domain\Product\Exception\PackOutOfStockException;
 use PrestaShop\PrestaShop\Core\Domain\Product\Exception\ProductCustomizationNotFoundException;
@@ -114,12 +115,18 @@ class CartFeatureContext extends AbstractDomainFeatureContext
         Cart::resetStaticCache();
         $customerId = SharedStorage::getStorage()->get($customerReference);
 
-        /** @var CartId $cartIdObject */
-        $cartIdObject = $this->getCommandBus()->handle(
-            new CreateEmptyCustomerCartCommand(
-                (int) $customerId
-            )
-        );
+        try {
+            /** @var CartId $cartIdObject */
+            $cartIdObject = $this->getCommandBus()->handle(
+                new CreateEmptyCustomerCartCommand(
+                    (int) $customerId
+                )
+            );
+        } catch (CustomerNotFoundException $e) {
+            $this->setLastException($e);
+
+            return;
+        }
         // Reset context's cart to avoid one from former tests to be used with invalid values (like non existent addresses)
         Context::getContext()->cart = new Cart($cartIdObject->getValue());
 
@@ -910,6 +917,20 @@ class CartFeatureContext extends AbstractDomainFeatureContext
         $cartInfo = $this->getCartForOrderCreationByReference($cartReference);
         Assert::assertTrue($cartInfo->getShipping()->isFreeShipping());
         Assert::assertEquals('0', $cartInfo->getShipping()->getShippingPrice());
+    }
+
+    /**
+     * @Then cart :cartReference should belong to customer :customerReference
+     */
+    public function assertCartBelongsToCustomer(string $cartReference, string $customerReference): void
+    {
+        $cartForOrderCreation = $this->getCartForOrderCreationByReference($cartReference);
+
+        Assert::assertSame(
+            $this->referenceToId($customerReference),
+            $cartForOrderCreation->getCustomerId(),
+            sprintf('Cart "%s" does not belong to customer "%s"', $cartReference, $customerReference)
+        );
     }
 
     /**

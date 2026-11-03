@@ -99,7 +99,7 @@ class CustomerController extends PrestaShopAdminController
         return $this->render('@PrestaShop/Admin/Sell/Customer/index.html.twig', [
             'help_link' => $this->generateSidebarLink($request->attributes->get('_legacy_controller')),
             'customerGrid' => $this->presentGrid($customerGrid),
-            'customersKpi' => $customersKpiFactory->build(),
+            'customersKpi' => ($this->getConfiguration()->get('PS_DISPLAY_BACKOFFICE_KPIS') ?? true) ? $customersKpiFactory->build() : null,
             'customerRequiredFieldsForm' => $this->getRequiredFieldsForm()->createView(),
             'isSingleShopContext' => $this->getShopContext()->getShopConstraint()->isSingleShopContext(),
             'deleteCustomersForm' => $deleteCustomerForm->createView(),
@@ -339,7 +339,7 @@ class CustomerController extends PrestaShopAdminController
         $customerViewedProductGrid = $customerViewedProductGridFactory->getGrid($customerViewedProductFilters);
 
         if ($request->query->has('conf')) {
-            $this->manageLegacyFlashes($request->query->get('conf'));
+            $this->manageLegacyFlashes($request->query->getInt('conf'));
         }
 
         return $this->render('@PrestaShop/Admin/Sell/Customer/view.html.twig', [
@@ -1014,7 +1014,7 @@ class CustomerController extends PrestaShopAdminController
      *
      * @param int $messageId The message id from legacy context
      */
-    private function manageLegacyFlashes($messageId): void
+    private function manageLegacyFlashes(int $messageId): void
     {
         $messages = [
             1 => $this->trans('Successful deletion', [], 'Admin.Notifications.Success'),

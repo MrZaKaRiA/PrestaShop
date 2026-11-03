@@ -681,21 +681,16 @@ class DispatcherCore
             /*
              * Step 5 - Custom routes set in ps_configurations. Those are configured product, category,
              * cms etc. rules that you can configure in SEO & URL section in the backoffice.
-             *
-             * Beware that these routes are not multilanguage, they will be the same for each language of the shop.
-             * It probably would not be difficult to make them multilanguage, if route was stored in configuration
-             * for each language.
              */
             foreach ($this->default_routes as $routeName => $routeDefinition) {
-                if ($customRouteRule = Configuration::get('PS_ROUTE_' . $routeName, null, null, $id_shop)) {
-                    $computedRoute = $this->computeRoute(
-                        $customRouteRule,
-                        $routeDefinition['controller'],
-                        $routeDefinition['keywords'],
-                        isset($routeDefinition['params']) ? $routeDefinition['params'] : []
-                    );
-                    foreach ($language_ids as $id_lang) {
-                        $this->routes[$id_shop][$id_lang][$routeName] = $computedRoute;
+                foreach ($language_ids as $id_lang) {
+                    if ($customRouteRule = Configuration::get('PS_ROUTE_' . $routeName, $id_lang, null, $id_shop)) {
+                        $this->routes[$id_shop][$id_lang][$routeName] = $this->computeRoute(
+                            $customRouteRule,
+                            $routeDefinition['controller'],
+                            $routeDefinition['keywords'],
+                            isset($routeDefinition['params']) ? $routeDefinition['params'] : []
+                        );
                     }
                 }
             }
@@ -1036,7 +1031,7 @@ class DispatcherCore
      * @param array $params
      * @param bool $force_routes
      * @param string $anchor Optional anchor to add at the end of this url
-     * @param null $id_shop
+     * @param int|null $id_shop
      *
      * @return string
      *
@@ -1115,8 +1110,11 @@ class DispatcherCore
                 }
             }
             $url = preg_replace('#\{([^{}]*:)?[a-z0-9_]+?(:[^{}]*)?\}#', '', $url);
-            if (count($add_param)) {
-                $url .= '?' . http_build_query($add_param, '', '&');
+
+            // Only append a query string if parameters remain after encoding
+            $query = http_build_query($add_param, '', '&');
+            if ($query !== '') {
+                $url .= '?' . $query;
             }
         } else {
             // Build a classic url index.php?controller=foo&...
@@ -1227,7 +1225,15 @@ class DispatcherCore
                                 }
                             }
 
-                            $controller = $routeDefinition['controller'] ? $routeDefinition['controller'] : $_GET['controller'];
+                            // Resolve the controller from the route or request, falling back to the not-found controller.
+                            if (!empty($routeDefinition['controller'])) {
+                                $controller = $routeDefinition['controller'];
+                            } elseif (!empty($_GET['controller'])) {
+                                $controller = $_GET['controller'];
+                            } else {
+                                $controller = $this->controller_not_found;
+                            }
+
                             if (!empty($routeDefinition['params'])) {
                                 foreach ($routeDefinition['params'] as $k => $v) {
                                     $_GET[$k] = $v;

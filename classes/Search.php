@@ -110,6 +110,9 @@ class SearchCore
     public const PS_SEARCH_ABSCISSA_MAX = 2;
     public const PS_DISTANCE_MAX = 5;
 
+    /* Block-level tags whose boundaries act as a word separator when stripping HTML for the index */
+    private const HTML_BLOCK_TAGS_REGEX = '#</?(?:address|article|aside|blockquote|br|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)\b[^>]*>#i';
+
     /**
      * Method that takes a raw string (sentence) and extract all keywords it can find.
      *
@@ -173,6 +176,14 @@ class SearchCore
 
         // The string gets into this method in a raw form of, like "Prestashop Tést A-1000".
         // This get rid of all tags, special characters and convert everything to lowercase.
+        // Separate block-level tag boundaries with a space so words on adjacent lines or list
+        // items do not merge (e.g. "in</li><li>File" -> "in File", not "infile"), while inline
+        // tags are stripped without a separator so a styled word stays whole
+        // (e.g. "<b>bio</b><span>logic</span>" -> "biologic"). The regex is skipped for tag-free
+        // input, which is the common case for a front-office search query.
+        if (strpos($string, '<') !== false) {
+            $string = preg_replace(self::HTML_BLOCK_TAGS_REGEX, ' ', $string) ?? $string;
+        }
         $string = Tools::strtolower(strip_tags($string));
         $string = html_entity_decode($string, ENT_NOQUOTES, 'utf-8');
         $string = preg_replace('/([' . PREG_CLASS_NUMBERS . ']+)[' . PREG_CLASS_PUNCTUATION . ']+(?=[' . PREG_CLASS_NUMBERS . '])/u', '\1', $string);
@@ -448,7 +459,7 @@ class SearchCore
          * This is used as "relevance" sort order.
          */
         $sqlScore = '';
-        if (!empty($scoreArray) && is_array($scoreArray)) {
+        if (!empty($scoreArray)) {
             $sqlScore = ',( ' .
                 'SELECT SUM(weight) ' .
                 'FROM ' . _DB_PREFIX_ . 'search_word sw ' .
@@ -942,7 +953,7 @@ class SearchCore
                 }
 
                 // If we find words that need to be indexed, they're added to the word table in the database
-                if (is_array($product_array) && !empty($product_array)) {
+                if (!empty($product_array)) {
                     $query_array = $query_array2 = [];
                     foreach ($product_array as $word => $weight) {
                         if ($weight) {
@@ -951,14 +962,14 @@ class SearchCore
                         }
                     }
 
-                    if (is_array($query_array) && !empty($query_array)) {
+                    if (!empty($query_array)) {
                         // The words are inserted...
                         $db->execute('
 						INSERT IGNORE INTO ' . _DB_PREFIX_ . 'search_word (id_lang, id_shop, word)
 						VALUES ' . implode(',', $query_array), false);
                     }
                     $word_ids_by_word = [];
-                    if (is_array($query_array2) && !empty($query_array2)) {
+                    if (!empty($query_array2)) {
                         // ...then their IDs are retrieved
                         $added_words = $db->executeS('
 						SELECT sw.id_word, sw.word

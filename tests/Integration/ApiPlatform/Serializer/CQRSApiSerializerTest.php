@@ -47,14 +47,19 @@ use PrestaShop\PrestaShop\Core\Domain\Shop\ValueObject\ShopConstraint;
 use PrestaShop\PrestaShop\Core\Domain\State\ValueObject\NoStateId;
 use PrestaShop\PrestaShop\Core\Domain\State\ValueObject\StateId;
 use PrestaShop\PrestaShop\Core\Util\DateTime\DateTime as DateTimeUtil;
+use PrestaShopBundle\ApiPlatform\Metadata\CQRSCreate;
 use PrestaShopBundle\ApiPlatform\Metadata\LocalizedValue;
 use PrestaShopBundle\ApiPlatform\NormalizationMapper;
 use PrestaShopBundle\ApiPlatform\Serializer\CQRSApiSerializer;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 use Symfony\Component\HttpFoundation\File\File;
+use Symfony\Component\Serializer\Exception\NotNormalizableValueException;
 use Tests\Integration\Utility\LanguageTrait;
+use Tests\Resources\ApiPlatform\Resources\BooleanCastItem;
+use Tests\Resources\ApiPlatform\Resources\BooleanCastResource;
 use Tests\Resources\ApiPlatform\Resources\LocalizedResource;
 use Tests\Resources\ApiPlatform\Resources\UpdatePositionResource;
+use Tests\Resources\ApiPlatform\ScalarUnionResource;
 use Tests\Resources\Resetter\LanguageResetter;
 use Tests\Resources\ResourceResetter;
 
@@ -188,6 +193,53 @@ class CQRSApiSerializerTest extends KernelTestCase
                 'reductionPercent' => 12.87,
             ],
             $editCustomerGroupCommand,
+        ];
+
+        $commandWithDefaultValues = new EditCustomerGroupCommand(42);
+        $commandWithDefaultValues->setReductionPercent(new DecimalNumber('12.87'));
+
+        yield 'denormalize command with default values injected by the operation on its input' => [
+            [
+                'customerGroupId' => 42,
+            ],
+            $commandWithDefaultValues,
+            [],
+            null,
+            [
+                'input' => ['class' => EditCustomerGroupCommand::class],
+                'operation' => new CQRSCreate(defaultValues: ['reductionPercent' => 12.87]),
+            ],
+        ];
+
+        $commandWithoutDefaultValues = new EditCustomerGroupCommand(42);
+
+        yield 'default values of the operation are not injected when no input class is expected' => [
+            [
+                'customerGroupId' => 42,
+            ],
+            $commandWithoutDefaultValues,
+            [],
+            null,
+            [
+                'operation' => new CQRSCreate(defaultValues: ['reductionPercent' => 12.87]),
+            ],
+        ];
+
+        $commandWithProvidedValue = new EditCustomerGroupCommand(42);
+        $commandWithProvidedValue->setReductionPercent(new DecimalNumber('5.5'));
+
+        yield 'default values of the operation never replace a value provided in the input' => [
+            [
+                'customerGroupId' => 42,
+                'reductionPercent' => 5.5,
+            ],
+            $commandWithProvidedValue,
+            [],
+            null,
+            [
+                'input' => ['class' => EditCustomerGroupCommand::class],
+                'operation' => new CQRSCreate(defaultValues: ['reductionPercent' => 12.87]),
+            ],
         ];
 
         $updateProductCommand = new UpdateProductCommand(42, ShopConstraint::shop(1));
@@ -532,6 +584,102 @@ class CQRSApiSerializerTest extends KernelTestCase
         ];
     }
 
+    /**
+     * A union of scalars and DecimalNumber keeps the JSON type of a scalar value: PHP reflects the
+     * class member first, but the CQRS normalizer tries the scalar members first (see
+     * ScalarFirstUnionTypeExtractor), so DecimalNumber only catches what no scalar accepts.
+     *
+     * @dataProvider getScalarUnionValues
+     */
+    public function testDenormalizeUnionWithDecimalNumberKeepsScalarTypes(mixed $jsonValue, mixed $expected): void
+    {
+        $serializer = self::getContainer()->get(CQRSApiSerializer::class);
+
+        /** @var ScalarUnionResource $resource */
+        $resource = $serializer->denormalize(['value' => $jsonValue], ScalarUnionResource::class);
+
+        if ($expected instanceof DecimalNumber) {
+            $this->assertInstanceOf(DecimalNumber::class, $resource->value);
+            $this->assertTrue($expected->equals($resource->value));
+        } else {
+            $this->assertSame($expected, $resource->value);
+        }
+    }
+
+    public static function getScalarUnionValues(): iterable
+    {
+        yield 'int stays an int' => [5, 5];
+        yield 'string stays a string' => ['n/a', 'n/a'];
+        yield 'numeric string stays a string' => ['42', '42'];
+        yield 'bool stays a bool' => [true, true];
+        yield 'null stays null' => [null, null];
+        yield 'float becomes a DecimalNumber (no float member)' => [1.5, new DecimalNumber('1.5')];
+    }
+
+    public function testDenormalizeNonNumericDecimalNumberIsANormalizationError(): void
+    {
+        $serializer = self::getContainer()->get(CQRSApiSerializer::class);
+
+        $this->expectException(NotNormalizableValueException::class);
+        $this->expectExceptionMessage('cannot be interpreted as a number');
+        $serializer->denormalize(['amount' => 'abc'], ScalarUnionResource::class);
+    }
+
+    public function testDenormalizeCastsBooleansAtEveryLevel(): void
+    {
+        $serializer = self::getContainer()->get(CQRSApiSerializer::class);
+
+        $item = new BooleanCastItem();
+        $item->itemId = 1;
+        $item->valid = false;
+        $firstListItem = new BooleanCastItem();
+        $firstListItem->itemId = 2;
+        $firstListItem->valid = true;
+        $secondListItem = new BooleanCastItem();
+        $secondListItem->itemId = 3;
+        $secondListItem->valid = false;
+        $expected = new BooleanCastResource();
+        $expected->id = 42;
+        $expected->enabled = true;
+        $expected->optional = null;
+        // Union types are ambiguous, they are not cast
+        $expected->union = 1;
+        $expected->item = $item;
+        $expected->items = [$firstListItem, $secondListItem];
+
+        // Database rows return booleans as tiny integers or numeric strings
+        $resource = $serializer->denormalize([
+            'id' => 42,
+            'enabled' => '1',
+            'optional' => null,
+            'union' => 1,
+            'item' => ['itemId' => 1, 'valid' => 0],
+            'items' => [
+                ['itemId' => 2, 'valid' => 1],
+                ['itemId' => 3, 'valid' => '0'],
+            ],
+        ], BooleanCastResource::class, null, [CQRSApiSerializer::CAST_BOOL => true]);
+        $this->assertEquals($expected, $resource);
+    }
+
+    public function testDenormalizeDoesNotCastBooleansByDefault(): void
+    {
+        $serializer = self::getContainer()->get(CQRSApiSerializer::class);
+
+        // Request bodies are not cast, a wrong type must be reported
+        $this->expectException(NotNormalizableValueException::class);
+        $serializer->denormalize(['enabled' => 1], BooleanCastResource::class);
+    }
+
+    public function testDenormalizeKeepsInvalidBooleans(): void
+    {
+        $serializer = self::getContainer()->get(CQRSApiSerializer::class);
+
+        // A value that doesn't represent a boolean is not turned into false
+        $this->expectException(NotNormalizableValueException::class);
+        $serializer->denormalize(['item' => ['valid' => 2]], BooleanCastResource::class, null, [CQRSApiSerializer::CAST_BOOL => true]);
+    }
+
     public function testNormalize(): void
     {
         $serializer = self::getContainer()->get(CQRSApiSerializer::class);
@@ -591,6 +739,7 @@ class CQRSApiSerializerTest extends KernelTestCase
                 ],
                 'redirectTarget' => null,
                 'availableDate' => null,
+                'virtualProductFile' => null,
             ],
         ];
 
@@ -620,6 +769,7 @@ class CQRSApiSerializerTest extends KernelTestCase
             23,
             1,
             DateTimeImmutable::createFromFormat(DateTimeUtil::DEFAULT_DATETIME_FORMAT, '1969-07-11 00:00:00'),
+            51,
         );
         yield 'object with datetime' => [
             $virtualProduct,
@@ -630,6 +780,7 @@ class CQRSApiSerializerTest extends KernelTestCase
                 'accessDays' => 23,
                 'downloadTimesLimit' => 1,
                 'expirationDate' => '1969-07-11 00:00:00',
+                'productId' => 51,
             ],
         ];
 

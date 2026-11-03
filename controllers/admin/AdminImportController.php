@@ -638,10 +638,6 @@ class AdminImportControllerCore extends AdminController
                 $bytes *= 1024;
         }
 
-        if ($bytes == '') {
-            $bytes = 20971520;
-        } // 20Mb
-
         $this->tpl_form_vars = [
             'post_max_size' => (int) $bytes,
             'module_confirmation' => Tools::isSubmit('import') && !count($this->warnings),
@@ -901,7 +897,7 @@ class AdminImportControllerCore extends AdminController
             @unlink($uniqid_path);
         }
 
-        if (empty($tab) || (!is_array($tab))) {
+        if (empty($tab)) {
             return [];
         }
 
@@ -1832,7 +1828,7 @@ class AdminImportControllerCore extends AdminController
                 if ($product->getType() == Product::PTYPE_VIRTUAL) {
                     $product_download = new ProductDownload();
                     $product_download->filename = ProductDownload::getNewFilename();
-                    Tools::copy($info['file_url'], _PS_DOWNLOAD_DIR_ . $product_download->filename);
+                    Tools::copyFromUntrustedSource($info['file_url'], _PS_DOWNLOAD_DIR_ . $product_download->filename);
                     $product_download->id_product = (int) $product->id;
                     $product_download->nb_downloadable = (int) $info['nb_downloadable'];
                     $product_download->date_expiration = $info['date_expiration'];
@@ -2059,7 +2055,7 @@ class AdminImportControllerCore extends AdminController
                     $feature_value = isset($tab_feature[1]) ? trim($tab_feature[1]) : '';
                     $position = isset($tab_feature[2]) ? (int) $tab_feature[2] - 1 : false;
                     $custom = isset($tab_feature[3]) ? (int) $tab_feature[3] : false;
-                    if (!empty($feature_name) && !empty($feature_value)) {
+                    if (!empty($feature_name) && $feature_value !== '') {
                         $id_feature = (int) Feature::addFeatureImport($feature_name, $position);
                         $id_product = null;
                         if ($force_ids || $match_ref) {
@@ -2719,7 +2715,7 @@ class AdminImportControllerCore extends AdminController
         $customers_shop = [];
         $customers_shop['shared'] = [];
         $default_shop = new Shop((int) Configuration::get('PS_SHOP_DEFAULT'));
-        if ($shop_is_feature_active && is_array($id_shop_list)) {
+        if ($shop_is_feature_active) {
             foreach ($id_shop_list as $id_shop) {
                 if (empty($id_shop)) {
                     continue;

@@ -352,11 +352,8 @@ class MailCore extends ObjectModel
             // Connect with the appropriate configuration, either SMTP or sendmail
             if ($configuration['PS_MAIL_METHOD'] == self::METHOD_SMTP) {
                 // Setup TLS configuration
-                if (!isset($configuration['PS_MAIL_SMTP_ENCRYPTION']) || Tools::strtolower($configuration['PS_MAIL_SMTP_ENCRYPTION']) === 'off') {
-                    $isTls = false;
-                } else {
-                    $isTls = true;
-                }
+                $useImplicitTls = self::useImplicitTls($configuration['PS_MAIL_SMTP_ENCRYPTION'] ?? 'off');
+                $esmtpTransportParameter = $useImplicitTls ? null : false;
 
                 // Setup port configration
                 if (!isset($configuration['PS_MAIL_SMTP_PORT'])) {
@@ -373,7 +370,7 @@ class MailCore extends ObjectModel
                 $transport = (new EsmtpTransport(
                     $configuration['PS_MAIL_SERVER'],
                     $configuration['PS_MAIL_SMTP_PORT'],
-                    $isTls
+                    $esmtpTransportParameter
                 ))
                     ->setUsername($configuration['PS_MAIL_USER'])
                     ->setPassword($configuration['PS_MAIL_PASSWD'])
@@ -548,9 +545,16 @@ class MailCore extends ObjectModel
                 }
             }
             ShopUrl::cacheMainDomainForShop((int) $idShop);
-            if (isset($logo) && $configuration['PS_MAIL_TYPE'] != Mail::TYPE_TEXT) {
+            if (isset($logo)
+                && $configuration['PS_MAIL_TYPE'] != Mail::TYPE_TEXT
+                && self::templateShowsShopLogo($templateHtml)
+            ) {
                 $templateVars['{shop_logo}'] = 'cid:shop_logo';
                 $email->embedFromPath($logo, 'shop_logo');
+            } else {
+                // Nothing will display it, so the file is not attached and the placeholder resolves
+                // to nothing rather than to a cid that points at an attachment we did not add.
+                $templateVars['{shop_logo}'] = '';
             }
 
             // Now, we add common links that are available in every template
@@ -632,6 +636,7 @@ class MailCore extends ObjectModel
             // Hook to alter Symfony Mailer before sending mail
             Hook::exec('actionMailAlterMessageBeforeSend', [
                 'message' => &$email,
+                'id_lang' => (int) $idLang,
             ]);
 
             // Create new message and DKIM sign it, if enabled and all data for signature are provided
@@ -664,15 +669,6 @@ class MailCore extends ObjectModel
                 $recipientsCc = self::convertAdressesToArray($email->getCc());
                 $recipientsBcc = self::convertAdressesToArray($email->getBcc());
 
-                if (!is_array($recipientsTo)) {
-                    $recipientsTo = [];
-                }
-                if (!is_array($recipientsCc)) {
-                    $recipientsCc = [];
-                }
-                if (!is_array($recipientsBcc)) {
-                    $recipientsBcc = [];
-                }
                 foreach (array_merge($recipientsTo, $recipientsCc, $recipientsBcc) as $emailAlias => $recipient_name) {
                     $mail->id = null;
                     $mail->recipient = Tools::substr($emailAlias, 0, 255);
@@ -785,15 +781,12 @@ class MailCore extends ObjectModel
 
         try {
             if ($smtpChecked) {
-                if (Tools::strtolower($smtpEncryption) === 'off') {
-                    $isTls = false;
-                } else {
-                    $isTls = true;
-                }
+                $useImplicitTls = self::useImplicitTls($smtpEncryption);
+                $esmtpTransportParameter = $useImplicitTls ? null : false;
                 $transport = (new EsmtpTransport(
                     $smtpServer,
                     $smtpPort,
-                    $isTls
+                    $esmtpTransportParameter
                 ))
                     ->setUsername($smtpLogin)
                     ->setPassword($smtpPassword)
@@ -959,7 +952,7 @@ class MailCore extends ObjectModel
             $string = implode($sep, $parts);
         } else {
             $string = chunk_split(base64_encode($string), $length, $sep);
-            $string = preg_replace('/' . preg_quote($sep) . '$/', '', $string);
+            $string = preg_replace('/' . preg_quote($sep, '/') . '$/', '', $string);
         }
 
         return $start . $string . $end;
@@ -1035,5 +1028,53 @@ class MailCore extends ObjectModel
         }
 
         return $recipientsTo;
+    }
+
+    /**
+     * Whether the merchant asked for an encrypted SMTP connection.
+     *
+     * The caller turns this into the third argument of EsmtpTransport, which is not "does this
+     * connection use TLS" but the narrower "open the socket in implicit TLS (SMTPS)":
+     *
+     *     $esmtpTransportParameter = self::useImplicitTls($smtpEncryption) ? null : false;
+     *
+     * true maps to null and not to true on purpose. true forces implicit TLS whatever the port
+     * is, and that is what made port 587 unusable: implicit TLS only answers on 465, while 587
+     * expects a plain connection upgraded with STARTTLS. null leaves the choice to the transport,
+     * which picks implicit TLS on 465 and STARTTLS anywhere else, so both ports work without the
+     * merchant having to know the difference.
+     *
+     * @param bool|string|null $smtpEncryption "off", "" or false disables encryption
+     */
+    protected static function useImplicitTls($smtpEncryption): bool
+    {
+        if (false === $smtpEncryption || '' === $smtpEncryption || null === $smtpEncryption) {
+            return false;
+        }
+
+        return Tools::strtolower((string) $smtpEncryption) !== 'off';
+    }
+
+    /**
+     * Whether the html body has anywhere to show the shop logo.
+     *
+     * The logo used to be attached to every message as soon as one was configured, so a template
+     * that does not display it still carried the image, which mail clients then show as an
+     * attachment. This is checked after actionEmailAddAfterContent so a module that adds the
+     * placeholder still gets the logo.
+     *
+     * @param string $templateHtml
+     *
+     * @return bool
+     */
+    private static function templateShowsShopLogo($templateHtml)
+    {
+        if (!is_string($templateHtml) || '' === $templateHtml) {
+            return false;
+        }
+
+        // Either the placeholder, or the content id itself for a template that writes the img tag.
+        return false !== strpos($templateHtml, '{shop_logo}')
+            || false !== strpos($templateHtml, 'cid:shop_logo');
     }
 }

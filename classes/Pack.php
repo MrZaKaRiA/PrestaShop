@@ -174,7 +174,7 @@ class PackCore extends Product
             $p->pack_quantity = $row['quantity'];
             $p->id_pack_product_attribute = (isset($row['id_product_attribute_item']) && $row['id_product_attribute_item'] ? $row['id_product_attribute_item'] : 0);
             if (isset($row['id_product_attribute_item']) && $row['id_product_attribute_item']) {
-                $sql = 'SELECT agl.`name` AS group_name, al.`name` AS attribute_name, pa.`reference` AS attribute_reference
+                $sql = 'SELECT agl.`public_name` AS group_name, al.`name` AS attribute_name, pa.`reference` AS attribute_reference
 					FROM `' . _DB_PREFIX_ . 'product_attribute` pa
 					' . Shop::addSqlAssociation('product_attribute', 'pa') . '
 					LEFT JOIN `' . _DB_PREFIX_ . 'product_attribute_combination` pac ON pac.`id_product_attribute` = pa.`id_product_attribute`
@@ -290,7 +290,8 @@ class PackCore extends Product
          */
 
         // If no pack stock or shop default, set it from configuration
-        if (empty($packStockType) || $packStockType == self::STOCK_TYPE_DEFAULT) {
+        // Avoid using empty(), because it would treat STOCK_TYPE_PACK_ONLY (0) as STOCK_TYPE_DEFAULT
+        if ((int) $packStockType == self::STOCK_TYPE_DEFAULT) {
             $packStockType = Configuration::get('PS_PACK_STOCK_TYPE');
         }
 
@@ -371,7 +372,7 @@ class PackCore extends Product
             if (Combination::isFeatureActive() && isset($line['id_product_attribute_item']) && $line['id_product_attribute_item']) {
                 $line['cache_default_attribute'] = $line['id_product_attribute'] = $line['id_product_attribute_item'];
 
-                $sql = 'SELECT pa.`reference` AS attribute_reference, agl.`name` AS group_name, al.`name` AS attribute_name,  pai.`id_image` AS id_product_attribute_image
+                $sql = 'SELECT pa.`reference` AS attribute_reference, agl.`public_name` AS group_name, al.`name` AS attribute_name,  pai.`id_image` AS id_product_attribute_image
 				FROM `' . _DB_PREFIX_ . 'product_attribute` pa
 				' . Shop::addSqlAssociation('product_attribute', 'pa') . '
 				LEFT JOIN `' . _DB_PREFIX_ . 'product_attribute_combination` pac ON pac.`id_product_attribute` = ' . $line['id_product_attribute_item'] . '
@@ -577,7 +578,7 @@ class PackCore extends Product
      * @param int $id_attribute_item The combination of the product
      * @param int $id_lang
      *
-     * @return array[Product] Packs that contains the given product
+     * @return Pack[] Packs that contains the given product
      */
     public static function getPacksContainingItem($id_item, $id_attribute_item, $id_lang)
     {
@@ -593,7 +594,7 @@ class PackCore extends Product
         $result = Db::getInstance()->executeS($query);
         $array_result = [];
         foreach ($result as $row) {
-            $p = new Product($row['id_product_pack'], true, $id_lang);
+            $p = new Pack($row['id_product_pack'], true, $id_lang);
             $p->loadStockData();
             $p->pack_item_quantity = $row['quantity']; // Specific need from StockAvailable::updateQuantity()
             $array_result[] = $p;

@@ -10,11 +10,15 @@ declare(strict_types=1);
 namespace PrestaShop\PrestaShop\Core\ExtraProperty\Schema;
 
 use Doctrine\DBAL\Connection;
+use ObjectModelCore;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinition;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyScope;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertySqlIndex;
 use PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyType;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Exception\ExtraPropertyRegistryException;
+use PrestaShop\PrestaShop\Core\ExtraProperty\Value\ExtraPropertyValueCaster;
+use PrestaShop\PrestaShop\Core\Util\Inflector;
 use Psr\Log\LoggerInterface;
-use RuntimeException;
 use Throwable;
 
 /**
@@ -40,7 +44,7 @@ class ExtraPropertySchemaManager implements ExtraPropertySchemaManagerInterface
     /**
      * {@inheritdoc}
      */
-    public function ensureExtraTableAndColumn(ExtraPropertyDefinition $definition): void
+    public function ensureExtraTableAndColumn(ExtraPropertyDefinition $definition): bool
     {
         $baseTableName = $this->prefix . $definition->getBaseTableName();
         $extraTableName = $this->prefix . $definition->getExtraTableName();
@@ -49,22 +53,33 @@ class ExtraPropertySchemaManager implements ExtraPropertySchemaManagerInterface
         $sqlIndex = $definition->getSqlIndex();
 
         if (!$this->tableExists($baseTableName)) {
-            throw new RuntimeException(sprintf('The base table "%s" does not exist.', $baseTableName));
+            throw new ExtraPropertyRegistryException(
+                sprintf(
+                    'The base table "%s" does not exist. The entity name must be an ObjectModel entity (e.g. product, order, combination) or an existing table name; LANG/SHOP scopes additionally require a {table}_lang/{table}_shop base table.',
+                    $baseTableName
+                ),
+                ExtraPropertyRegistryException::BASE_TABLE_NOT_FOUND
+            );
         }
 
         if (!$this->tableExists($extraTableName)) {
+            $this->assertLangBaseTableShopCoherence($definition, $baseTableName);
             $this->createExtraTableFromBaseTable($baseTableName, $extraTableName);
             $this->logger->info('Extra table created: {table}', ['table' => $extraTableName]);
         }
 
+        $columnAdded = false;
         if (!$this->columnExists($extraTableName, $columnName)) {
             $this->createExtraColumn($extraTableName, $columnName, $sqlColumnDefinition);
             $this->logger->info('Extra column created: {table}.{column}', ['table' => $extraTableName, 'column' => $columnName]);
+            $columnAdded = true;
         } else {
             $this->syncExtraColumnDefinition($extraTableName, $columnName, $definition);
         }
 
         $this->syncExtraColumnIndex($extraTableName, $columnName, $sqlIndex);
+
+        return $columnAdded;
     }
 
     /**
@@ -251,6 +266,12 @@ class ExtraPropertySchemaManager implements ExtraPropertySchemaManagerInterface
      */
     protected function defaultMatches(mixed $liveDefault, ExtraPropertyDefinition $definition): bool
     {
+        // TEXT-backed columns never carry a DDL DEFAULT (see ColumnDefinitionMapper):
+        // the declared default is registry-only, nothing to compare on the live column.
+        if (in_array($definition->getType(), [ExtraPropertyType::HTML, ExtraPropertyType::JSON], true)) {
+            return true;
+        }
+
         $desired = $definition->getDefaultValue();
         if (null === $desired || null === $liveDefault) {
             return (null === $desired) === (null === $liveDefault);
@@ -261,10 +282,8 @@ class ExtraPropertySchemaManager implements ExtraPropertySchemaManagerInterface
             $live = str_replace("''", "'", substr($live, 1, -1));
         }
 
-        $desiredString = match ($definition->getType()) {
-            ExtraPropertyType::BOOL => $desired ? '1' : '0',
-            default => (string) $desired,
-        };
+        // Same canonical stringification as the registry row write and the DDL clause.
+        $desiredString = (string) ExtraPropertyValueCaster::castDefaultValueForDb($definition->getType(), $desired);
 
         if (is_numeric($live) && is_numeric($desiredString)) {
             return (float) $live === (float) $desiredString;
@@ -299,19 +318,60 @@ class ExtraPropertySchemaManager implements ExtraPropertySchemaManagerInterface
     }
 
     /**
+     * Safeguard for multilang-multishop coherence, checked before the extra lang table is
+     * first created. The extra table mirrors the base {entity}_lang primary key, so an
+     * entity whose ObjectModel class declares `multilang_shop` while its physical lang
+     * table's PK carries no id_shop would silently get a NON-shop-aware extra table —
+     * its per-shop lang values would then overwrite each other. Such a mismatch is a
+     * broken entity definition (module-provided external table): fail registration
+     * explicitly instead.
+     *
+     * Entities without a resolvable ObjectModel class are skipped: the physical schema is
+     * then the only source of truth and the mirrored shape is coherent by construction.
+     *
+     * @throws ExtraPropertyRegistryException when the declaration and the schema disagree
+     */
+    protected function assertLangBaseTableShopCoherence(ExtraPropertyDefinition $definition, string $baseTableName): void
+    {
+        if (ExtraPropertyScope::LANG !== $definition->getScope()) {
+            return;
+        }
+
+        $className = Inflector::getInflector()->classify($definition->getEntityName());
+        if (!class_exists('ObjectModelCore') || !class_exists($className) || !ObjectModelCore::isClassLangMultishop($className)) {
+            return;
+        }
+
+        $primaryKey = $this->connection->createSchemaManager()->introspectTable($baseTableName)->getPrimaryKey();
+        if (null !== $primaryKey && !in_array('id_shop', $primaryKey->getColumns(), true)) {
+            throw new ExtraPropertyRegistryException(
+                sprintf(
+                    'The class "%s" declares multilang_shop but the primary key of its lang table "%s" has no id_shop column: the mirrored extra table would not be shop-aware. Fix the base table schema before registering lang-scoped extra properties.',
+                    $className,
+                    $baseTableName
+                ),
+                ExtraPropertyRegistryException::SCHEMA_FAILURE
+            );
+        }
+    }
+
+    /**
      * Creates the extra table by mirroring the primary key columns of the base entity table.
      *
      * @param string $baseTableName Full base table name (with prefix)
      * @param string $extraTableName Full extra table name (with prefix)
      *
-     * @throws RuntimeException if the base table schema cannot be loaded or has no PK
+     * @throws ExtraPropertyRegistryException if the base table schema cannot be loaded or has no PK
      */
     protected function createExtraTableFromBaseTable(string $baseTableName, string $extraTableName): void
     {
         $baseTableDetails = $this->connection->createSchemaManager()->introspectTable($baseTableName);
         $primaryKey = $baseTableDetails->getPrimaryKey();
         if (null === $primaryKey) {
-            throw new RuntimeException(sprintf('The base table "%s" has no primary key.', $baseTableName));
+            throw new ExtraPropertyRegistryException(
+                sprintf('The base table "%s" has no primary key.', $baseTableName),
+                ExtraPropertyRegistryException::SCHEMA_FAILURE
+            );
         }
 
         $platform = $this->connection->getDatabasePlatform();

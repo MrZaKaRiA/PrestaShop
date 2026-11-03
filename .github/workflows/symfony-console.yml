@@ -8,8 +8,10 @@ permissions:
 concurrency:
   group: ${{ github.event_name }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+# Pull-requests on a private repository are not coming from a fork, so avoid running the same job twice with push and pull_request events.
 jobs:
   symfony-console:
+    if: github.event_name != 'push' || !github.event.repository.private
     strategy:
       matrix:
         app-id: [ admin, admin-api, front ]
@@ -31,7 +33,7 @@ jobs:
           extensions: mbstring, intl, gd, xml, dom, json, fileinfo, curl, zip, iconv
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Get Composer Cache Directory
         id: composer-cache

@@ -7,13 +7,18 @@
 namespace PrestaShopBundle\DependencyInjection;
 
 use PrestaShop\PrestaShop\Adapter\Configuration;
-use PrestaShop\PrestaShop\Core\ConfigurationInterface;
 use PrestaShop\PrestaShop\Core\Http\CookieOptions;
+use PrestaShop\PrestaShop\Core\Import\Engine\EntityImporter\Product\ProductRowImporter;
+use PrestaShop\PrestaShop\Core\Import\Engine\EntityImporter\Product\Step\ProductRowStepInterface;
+use PrestaShop\PrestaShop\Core\Import\Engine\EntityImporterInterface;
+use PrestaShop\PrestaShop\Core\Import\Engine\EntityImporterRegistry;
 use PrestaShop\PrestaShop\Core\Security\OAuth2\AuthorisationServerInterface;
 use Symfony\Component\Config\FileLocator;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Extension\PrependExtensionInterface;
 use Symfony\Component\DependencyInjection\Loader\YamlFileLoader;
+use Symfony\Component\Filesystem\Filesystem;
+use Symfony\Component\Finder\Finder;
 use Symfony\Component\HttpFoundation\Cookie;
 use Symfony\Component\HttpKernel\DependencyInjection\Extension;
 use Throwable;
@@ -35,6 +40,19 @@ class PrestaShopExtension extends Extension implements PrependExtensionInterface
         // Automatically tag services that implements this interface
         $container->registerForAutoconfiguration(AuthorisationServerInterface::class)
             ->addTag('core.oauth2.authorization_server')
+        ;
+
+        // Automatically tag entity importers (including module services, as
+        // long as their definitions enable autoconfiguration)
+        $container->registerForAutoconfiguration(EntityImporterInterface::class)
+            ->addTag(EntityImporterRegistry::SERVICE_TAG)
+        ;
+
+        // Automatically tag product row steps (same mechanism: module services
+        // are collected too; an autoconfigured step without an explicit tag
+        // priority runs at 0, after every core step)
+        $container->registerForAutoconfiguration(ProductRowStepInterface::class)
+            ->addTag(ProductRowImporter::STEP_TAG)
         ;
     }
 
@@ -74,7 +92,6 @@ class PrestaShopExtension extends Extension implements PrependExtensionInterface
     protected function getCookieSameSite(): string
     {
         try {
-            /** @var ConfigurationInterface $configuration */
             $configuration = new Configuration();
             $cookieSamesite = $configuration->get('PS_COOKIE_SAMESITE');
             $cookieSamesite = match ($cookieSamesite) {
@@ -92,7 +109,6 @@ class PrestaShopExtension extends Extension implements PrependExtensionInterface
     protected function getAdminCookieLifetime(): int
     {
         try {
-            /** @var ConfigurationInterface $configuration */
             $configuration = new Configuration();
             $cookieLifetimeBo = (int) $configuration->get('PS_COOKIE_LIFETIME_BO');
             if (empty($cookieLifetimeBo) || $cookieLifetimeBo <= 0) {
@@ -127,9 +143,12 @@ class PrestaShopExtension extends Extension implements PrependExtensionInterface
                 // APIPlatform is looping on included resources and doing a require_once on those resources in ReflectionClassRecursiveIterator::getReflectionClassesFromDirectories.
                 // This means that everything in those files is interpreted including the exit statement in some of those files ( especially in some index.php files used as an old way to make the directory read only ).
                 // Since we cannot override or decorate the reflection class itself we have no other choice but to delete those files.
-                if (file_exists($entitiesRessourcesPath . '/index.php')) {
-                    unlink($entitiesRessourcesPath . '/index.php');
-                }
+                (new Filesystem())->remove(
+                    Finder::create()
+                        ->files()
+                        ->in($entitiesRessourcesPath)
+                        ->name('index.php')
+                );
                 $paths[] = $entitiesRessourcesPath;
             }
 

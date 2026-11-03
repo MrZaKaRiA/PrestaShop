@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         pair:
-          - source: 9.1.x
+          - source: 9.2.x
             target: develop
     uses: ./.github/workflows/create-merge-pr.yml
     with:

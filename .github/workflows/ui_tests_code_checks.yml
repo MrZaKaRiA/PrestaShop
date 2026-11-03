@@ -21,15 +21,17 @@ concurrency:
   group: ${{ github.event_name }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Pull-requests on a private repository are not coming from a fork, so avoid running the same job twice with push and pull_request events.
 jobs:
 
   ESLint:
+    if: github.event_name != 'push' || !github.event.repository.private
     runs-on: ubuntu-latest
     name: ESLint
 
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Cache Playwright browsers
         uses: actions/cache@v4
@@ -38,7 +40,7 @@ jobs:
           key: ${{ runner.os }}-browsers
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -49,12 +51,13 @@ jobs:
         run: npm run lint
 
   tscheck:
+    if: github.event_name != 'push' || !github.event.repository.private
     runs-on: ubuntu-latest
     name: TypeScript Check
 
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Cache Playwright browsers
         uses: actions/cache@v4
@@ -63,7 +66,7 @@ jobs:
           key: ${{ runner.os }}-browsers
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -74,12 +77,13 @@ jobs:
         run: npm run check:typescript
 
   Steps-identifiers:
+    if: github.event_name != 'push' || !github.event.repository.private
     runs-on: ubuntu-latest
     name: Checking Steps identifiers
 
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Cache Playwright browsers
         uses: actions/cache@v4
@@ -88,7 +92,7 @@ jobs:
           key: ${{ runner.os }}-browsers
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -106,12 +110,13 @@ jobs:
         run: npm run check:step-identifiers
 
   suites:
+    if: github.event_name != 'push' || !github.event.repository.private
     runs-on: ubuntu-latest
     name: Checking Suites Count
 
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Cache Playwright browsers
         uses: actions/cache@v4
@@ -120,7 +125,7 @@ jobs:
           key: ${{ runner.os }}-browsers
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 

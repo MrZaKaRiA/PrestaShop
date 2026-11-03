@@ -2,11 +2,13 @@
 services:
   _defaults:
     autowire: true
+    autoconfigure: true
     public: false
 
-  # ─── Repository write alias (BO override) ────────────────────────────────────
-  # Overrides the common alias so that write operations in the back-office also
-  # invalidate the definition cache.
+  # ─── Repository write alias (back-office only) ───────────────────────────────
+  # Registering/unregistering extra property definitions only happens on the back-office side (module install),
+  # so the writer interface is bound here (not in common.yml). It points at the cache decorator so every write
+  # invalidates the definition cache.
   PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionWriterInterface:
     alias: 'PrestaShop\PrestaShop\Core\ExtraProperty\Definition\CachedExtraPropertyDefinitionRepository'
 
@@ -29,6 +31,9 @@ services:
       $writeRepository: '@PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionWriterInterface'
       $schemaManager: '@PrestaShop\PrestaShop\Core\ExtraProperty\Schema\ExtraPropertySchemaManagerInterface'
       $logger: '@logger'
+      $formOptionsValidator: '@PrestaShop\PrestaShop\Core\ExtraProperty\Form\FormOptionsValidator'
+      # Existence check on the shop association ids (the *_shop rows carry no foreign key).
+      $shopRepository: '@PrestaShop\PrestaShop\Adapter\Shop\Repository\ShopRepository'
 
   PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyRegistryInterface:
     alias: 'PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyRegistry'
@@ -38,31 +43,50 @@ services:
 
   # ─── Back-office form services ────────────────────────────────────────────────
 
+  PrestaShop\PrestaShop\Core\ExtraProperty\Form\ExtraPropertyFormTypeMap: ~
+
+  # Save-time validation of the formType/formOptions pair: builds a throwaway form with
+  # the same type + options merge as ExtraPropertiesFormBuilderModifier. Consumed by the
+  # registry (blocking gate) and by the BO definition form (inline errors).
+  PrestaShop\PrestaShop\Core\ExtraProperty\Form\FormOptionsValidator:
+    arguments:
+      $formFactory: '@form.factory'
+      $formTypeMap: '@PrestaShop\PrestaShop\Core\ExtraProperty\Form\ExtraPropertyFormTypeMap'
+
+  # Machine-readable description of the constraint allowlist, serialized into the definition
+  # page so the Validation card UI can offer constraints with their configurable options.
+  PrestaShop\PrestaShop\Core\ExtraProperty\Form\ExtraPropertyConstraintCatalog: ~
+
   PrestaShop\PrestaShop\Core\ExtraProperty\Form\ExtraPropertiesFormBuilderModifier:
     arguments:
       $repository: '@PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionRepositoryInterface'
       $reader: '@PrestaShop\PrestaShop\Core\ExtraProperty\Value\ExtraPropertyReaderInterface'
       $translator: '@translator'
-      $validatorAdapter: '@PrestaShop\PrestaShop\Core\ExtraProperty\Validation\ExtraPropertyValidatorInterface'
       $shopContext: '@PrestaShop\PrestaShop\Core\Context\ShopContext'
       $formBuilderModifier: '@PrestaShopBundle\Form\FormBuilderModifier'
+      $formTypeMap: '@PrestaShop\PrestaShop\Core\ExtraProperty\Form\ExtraPropertyFormTypeMap'
+      $definitionShopFilter: '@PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionShopFilterInterface'
+      # Logs the form options / form type the read-side policy drops at render time.
+      $logger: '@logger'
 
   PrestaShop\PrestaShop\Core\ExtraProperty\Form\ExtraPropertiesFormDataPersister:
     arguments:
       $repository: '@PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionRepositoryInterface'
       $writer: '@PrestaShop\PrestaShop\Core\ExtraProperty\Value\ExtraPropertyWriterInterface'
       $shopContext: '@PrestaShop\PrestaShop\Core\Context\ShopContext'
+      $definitionShopFilter: '@PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionShopFilterInterface'
 
-  # ─── Admin API extra properties service ──────────────────────────────────────
+  # ─── BO CQRS handlers for ExtraPropertyDefinition management ────────────────
+  # All dependencies (repository/registry interfaces) are autowireable, so the bare
+  # FQCN is enough — autoconfigure (set as _defaults below) registers the #[AsCommandHandler]/
+  # #[AsQueryHandler] attributes.
 
-  PrestaShopBundle\ApiPlatform\ExtraProperties\ExtraPropertiesApiService:
-    arguments:
-      $repository: '@PrestaShop\PrestaShop\Core\ExtraProperty\Definition\ExtraPropertyDefinitionRepositoryInterface'
-      $requestStack: '@request_stack'
-      $reader: '@PrestaShop\PrestaShop\Core\ExtraProperty\Value\ExtraPropertyReaderInterface'
-      $writer: '@PrestaShop\PrestaShop\Core\ExtraProperty\Value\ExtraPropertyWriterInterface'
-      $validatorAdapter: '@PrestaShop\PrestaShop\Core\ExtraProperty\Validation\ExtraPropertyValidatorInterface'
-      $shopContext: '@PrestaShop\PrestaShop\Core\Context\ShopContext'
-      $langRepository: '@PrestaShopBundle\Entity\Repository\LangRepository'
-      $propertyNameCollectionFactory: '@?api_platform.metadata.property_name_collection_factory'
-      $propertyMetadataFactory: '@?api_platform.metadata.property.metadata_factory'
+  PrestaShop\PrestaShop\Adapter\ExtraProperty\QueryHandler\GetExtraPropertyDefinitionForEditingHandler: ~
+
+  PrestaShop\PrestaShop\Adapter\ExtraProperty\CommandHandler\AddExtraPropertyDefinitionHandler: ~
+
+  PrestaShop\PrestaShop\Adapter\ExtraProperty\CommandHandler\UpdateExtraPropertyDefinitionHandler: ~
+
+  PrestaShop\PrestaShop\Adapter\ExtraProperty\CommandHandler\DeleteExtraPropertyDefinitionHandler: ~
+
+  PrestaShop\PrestaShop\Adapter\ExtraProperty\CommandHandler\BulkDeleteExtraPropertyDefinitionHandler: ~
